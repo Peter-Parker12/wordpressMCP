@@ -78,7 +78,34 @@ app.post('/.well-known/mcp/register', (req, res) => {
   } catch (e) {
     console.error('Failed to write debug log', e.message);
   }
-  res.json({ ok: true, message: 'registration accepted' });
+  try {
+    const crypto = require('crypto');
+    const gen = () => crypto.randomBytes(16).toString('hex');
+    const client_id = `claude-${gen()}`;
+    const client_secret = gen();
+    const resp = {
+      client_id,
+      client_secret,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      client_secret_expires_at: 0,
+      token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
+      grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
+      response_types: req.body.response_types || ['code'],
+      redirect_uris: req.body.redirect_uris || [],
+      client_name: req.body.client_name || 'claude',
+      application_type: req.body.application_type || 'web',
+    };
+    try {
+      const fs = require('fs');
+      fs.appendFileSync('debug-register.log', `RESPONSE: ${JSON.stringify(resp)}\n`);
+    } catch (e) {}
+    res.status(201).json(resp);
+    return;
+  } catch (e) {
+    console.error('Registration response error', e.message);
+    res.status(500).json({ ok: false, error: 'registration response failed' });
+    return;
+  }
 });
 
 app.post('/register', (req, res) => {
@@ -91,7 +118,34 @@ app.post('/register', (req, res) => {
   } catch (e) {
     console.error('Failed to write debug log', e.message);
   }
-  res.json({ ok: true, message: 'registration accepted' });
+  try {
+    const crypto = require('crypto');
+    const gen = () => crypto.randomBytes(16).toString('hex');
+    const client_id = `claude-${gen()}`;
+    const client_secret = gen();
+    const resp = {
+      client_id,
+      client_secret,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      client_secret_expires_at: 0,
+      token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
+      grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
+      response_types: req.body.response_types || ['code'],
+      redirect_uris: req.body.redirect_uris || [],
+      client_name: req.body.client_name || 'claude',
+      application_type: req.body.application_type || 'web',
+    };
+    try {
+      const fs = require('fs');
+      fs.appendFileSync('debug-register.log', `RESPONSE: ${JSON.stringify(resp)}\n`);
+    } catch (e) {}
+    res.status(201).json(resp);
+    return;
+  } catch (e) {
+    console.error('Registration response error', e.message);
+    res.status(500).json({ ok: false, error: 'registration response failed' });
+    return;
+  }
 });
 
 app.post('/create-post', async (req, res) => {

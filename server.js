@@ -35,6 +35,15 @@ app.get('/', (req, res) => {
   });
 });
 
+app.get('/check-wp-auth', async (req, res) => {
+  try {
+    const user = await wp.getCurrentUser();
+    res.json({ ok: true, user });
+  } catch (error) {
+    res.status(401).json({ ok: false, error: error.message, details: error.response?.data || null });
+  }
+});
+
 app.post('/create-post', async (req, res) => {
   try {
     const post = await wp.createPost(req.body);

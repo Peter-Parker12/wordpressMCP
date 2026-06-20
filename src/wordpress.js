@@ -70,11 +70,17 @@ function createWordPressClient({ url, username, password }) {
     return response.data;
   }
 
+  async function getCurrentUser() {
+    const response = await client.get('/users/me');
+    return response.data;
+  }
+
   return {
     createPost,
     updatePost,
     uploadMedia,
     setFeaturedImage,
+    getCurrentUser,
   };
 }
 

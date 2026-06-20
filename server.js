@@ -1,6 +1,7 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const { createWordPressClient } = require('./src/wordpress');
+const manifest = require('./mcp-manifest.json');
 
 dotenv.config();
 
@@ -42,6 +43,10 @@ app.get('/check-wp-auth', async (req, res) => {
   } catch (error) {
     res.status(401).json({ ok: false, error: error.message, details: error.response?.data || null });
   }
+});
+
+app.get('/manifest', (req, res) => {
+  res.json(manifest);
 });
 
 app.post('/create-post', async (req, res) => {

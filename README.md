@@ -89,8 +89,51 @@ curl http://localhost:4000/create-post-with-image \
 
 ## Claude / MCP integration
 
-This project includes a simple manifest at `mcp-manifest.json` describing the available operations.
+This project includes a manifest at `mcp-manifest.json` describing the available operations.
 
-If you want Claude to call this server, point your tool integration to `http://localhost:4000` and map operations to the endpoints listed above.
+The server also exposes the manifest directly at `http://localhost:9808/manifest` (or your public tunnel host).
 
-> Note: this repository is a local helper service. Authenticate your WordPress site using an application password and keep `.env` private.
+### Test on Claude
+
+1. Start the server locally or in Docker:
+
+```bash
+docker compose up -d --build
+```
+
+2. Confirm the manifest is available:
+
+```bash
+curl http://127.0.0.1:9809/manifest
+```
+
+3. In Claude custom connector / integration settings, use:
+- `http://localhost:9809` if Claude runs on the same machine
+- or your tunnel hostname if using Cloudflare, e.g. `https://mcp.yourdomain.com`
+
+4. Configure the connector to use the server endpoints:
+- `GET /health`
+- `GET /manifest`
+- `POST /create-post`
+- `POST /update-post`
+- `POST /upload-image`
+- `POST /set-featured-image`
+- `POST /create-post-with-image`
+
+5. Run a quick test request in Claude against `/health` or `/manifest`.
+
+### Example validation URL
+
+If your connector settings accept a manifest URL, use:
+
+```bash
+http://localhost:9809/manifest
+```
+
+or:
+
+```bash
+https://mcp.yourdomain.com/manifest
+```
+
+> Note: Keep your `.env` private. The server must authenticate to WordPress using an Application Password and the correct site URL.

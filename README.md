@@ -133,16 +133,22 @@ curl http://127.0.0.1:9809/manifest
 - `http://localhost:9809` if Claude runs on the same machine
 - or your tunnel hostname if using Cloudflare, e.g. `https://mcp.yourdomain.com`
 
-4. Configure the connector to use the server endpoints:
+4. Important: set authentication to **No auth / No sign-in service**.
+
+This server already authenticates to WordPress using the `.env` values, so Claude should not be configured with OAuth or an OAuth Client ID.
+
+5. Configure the connector to use the server endpoints:
 - `GET /health`
 - `GET /manifest`
+- `GET /posts`
+- `GET /posts/:postId`
 - `POST /create-post`
 - `POST /update-post`
 - `POST /upload-image`
 - `POST /set-featured-image`
 - `POST /create-post-with-image`
 
-5. Run a quick test request in Claude against `/health` or `/manifest`.
+6. Run a quick test request in Claude against `/health` or `/manifest`.
 
 ### Example validation URL
 

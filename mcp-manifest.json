@@ -1,0 +1,78 @@
+{
+  "name": "WordPress MCP Server",
+  "description": "Local MCP server exposing WordPress blog creation and media upload operations for Claude.",
+  "version": "0.1.0",
+  "protocol": "mcp",
+  "endpoints": [
+    {
+      "path": "/health",
+      "method": "GET",
+      "description": "Health check endpoint."
+    },
+    {
+      "path": "/create-post",
+      "method": "POST",
+      "description": "Create a new WordPress post.",
+      "parameters": {
+        "title": "string",
+        "content": "string",
+        "status": "string (optional, default draft)",
+        "excerpt": "string (optional)",
+        "categories": "array of category IDs (optional)",
+        "tags": "array of tag IDs (optional)",
+        "featured_media": "media ID (optional)"
+      }
+    },
+    {
+      "path": "/update-post",
+      "method": "POST",
+      "description": "Update an existing WordPress post.",
+      "parameters": {
+        "postId": "integer",
+        "title": "string (optional)",
+        "content": "string (optional)",
+        "status": "string (optional)",
+        "excerpt": "string (optional)",
+        "categories": "array of category IDs (optional)",
+        "tags": "array of tag IDs (optional)",
+        "featured_media": "media ID (optional)"
+      }
+    },
+    {
+      "path": "/upload-image",
+      "method": "POST",
+      "description": "Upload an image to WordPress media library.",
+      "parameters": {
+        "imageUrl": "string (URL to fetch image from) or imageBase64: string",
+        "fileName": "string (optional filename)",
+        "mimeType": "string (optional)"
+      }
+    },
+    {
+      "path": "/set-featured-image",
+      "method": "POST",
+      "description": "Set a post's featured image using a media ID.",
+      "parameters": {
+        "postId": "integer",
+        "mediaId": "integer"
+      }
+    },
+    {
+      "path": "/create-post-with-image",
+      "method": "POST",
+      "description": "Create a post and upload an image to use as featured media.",
+      "parameters": {
+        "title": "string",
+        "content": "string",
+        "imageUrl": "string (optional)",
+        "imageBase64": "string (optional)",
+        "fileName": "string (optional)",
+        "mimeType": "string (optional)",
+        "status": "string (optional, default draft)",
+        "excerpt": "string (optional)",
+        "categories": "array of category IDs (optional)",
+        "tags": "array of tag IDs (optional)"
+      }
+    }
+  ]
+}

@@ -93,5 +93,16 @@
         "tags": "array of tag IDs (optional)"
       }
     }
+      ,
+      {
+        "path": "/.well-known/mcp/register",
+        "method": "POST",
+        "description": "Connector registration endpoint (compatibility)."
+      },
+      {
+        "path": "/register",
+        "method": "POST",
+        "description": "Connector registration endpoint (compatibility)."
+      }
   ]
 }

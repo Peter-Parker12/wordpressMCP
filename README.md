@@ -147,6 +147,8 @@ This server already authenticates to WordPress using the `.env` values, so Claud
 - `POST /upload-image`
 - `POST /set-featured-image`
 - `POST /create-post-with-image`
+- `POST /.well-known/mcp/register` (compatibility)
+- `POST /register` (compatibility)
 
 6. Run a quick test request in Claude against `/health` or `/manifest`.
 

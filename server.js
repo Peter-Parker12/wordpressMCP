@@ -67,6 +67,15 @@ app.get('/manifest', (req, res) => {
   res.json(manifest);
 });
 
+// Compatibility endpoints for connector registration probes
+app.post('/.well-known/mcp/register', (req, res) => {
+  res.json({ ok: true, message: 'registration accepted' });
+});
+
+app.post('/register', (req, res) => {
+  res.json({ ok: true, message: 'registration accepted' });
+});
+
 app.post('/create-post', async (req, res) => {
   try {
     const post = await wp.createPost(req.body);

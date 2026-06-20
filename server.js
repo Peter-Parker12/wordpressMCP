@@ -27,6 +27,14 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', site: WP_URL });
 });
 
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'WordPress MCP Server',
+    endpoints: ['/health', '/create-post', '/update-post', '/upload-image', '/set-featured-image', '/create-post-with-image']
+  });
+});
+
 app.post('/create-post', async (req, res) => {
   try {
     const post = await wp.createPost(req.body);

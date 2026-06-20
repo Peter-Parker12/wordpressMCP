@@ -69,10 +69,28 @@ app.get('/manifest', (req, res) => {
 
 // Compatibility endpoints for connector registration probes
 app.post('/.well-known/mcp/register', (req, res) => {
+  console.log('=== MCP register probe received at /.well-known/mcp/register ===');
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  try {
+    const fs = require('fs');
+    fs.appendFileSync('debug-register.log', `TIME: ${new Date().toISOString()}\nPATH: /.well-known/mcp/register\nHEADERS: ${JSON.stringify(req.headers)}\nBODY: ${JSON.stringify(req.body)}\n----\n`);
+  } catch (e) {
+    console.error('Failed to write debug log', e.message);
+  }
   res.json({ ok: true, message: 'registration accepted' });
 });
 
 app.post('/register', (req, res) => {
+  console.log('=== MCP register probe received at /register ===');
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  try {
+    const fs = require('fs');
+    fs.appendFileSync('debug-register.log', `TIME: ${new Date().toISOString()}\nPATH: /register\nHEADERS: ${JSON.stringify(req.headers)}\nBODY: ${JSON.stringify(req.body)}\n----\n`);
+  } catch (e) {
+    console.error('Failed to write debug log', e.message);
+  }
   res.json({ ok: true, message: 'registration accepted' });
 });
 

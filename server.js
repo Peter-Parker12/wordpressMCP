@@ -29,11 +29,11 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'WordPress MCP Server',
-    endpoints: ['/health', '/create-post', '/update-post', '/upload-image', '/set-featured-image', '/create-post-with-image']
-  });
+  res.json(manifest);
+});
+
+app.get('/.well-known/mcp', (req, res) => {
+  res.json(manifest);
 });
 
 app.get('/check-wp-auth', async (req, res) => {

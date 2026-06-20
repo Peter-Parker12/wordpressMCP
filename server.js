@@ -96,6 +96,6 @@ app.post('/create-post-with-image', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`WordPress MCP Server listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`WordPress MCP Server listening on http://0.0.0.0:${PORT}`);
 });

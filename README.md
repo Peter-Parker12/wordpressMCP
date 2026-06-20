@@ -27,7 +27,7 @@ cp .env.example .env
 - `WP_URL`: your self-hosted WordPress base URL, e.g. `https://example.com`
 - `WP_USERNAME`: WordPress username
 - `WP_APP_PASSWORD`: WordPress application password
-- `PORT`: local port for the MCP server (default `4000`)
+- `PORT`: local port for the MCP server (default `9808`)
 
 4. Start the server locally:
 
@@ -49,7 +49,7 @@ If you want to run only the Docker image:
 
 ```bash
 docker build -t wordpress-mcp .
-docker run --env-file .env -p 4000:4000 wordpress-mcp
+docker run --env-file .env -p 9808:9808 wordpress-mcp
 ```
 
 ## API Endpoints

@@ -92,17 +92,51 @@
         "categories": "array of category IDs (optional)",
         "tags": "array of tag IDs (optional)"
       }
+    },
+    {
+      "path": "/.well-known/mcp/register",
+      "method": "POST",
+      "description": "Connector registration endpoint (compatibility)."
+    },
+    {
+      "path": "/register",
+      "method": "POST",
+      "description": "Connector registration endpoint (compatibility)."
+    },
+    {
+      "path": "/oauth/token",
+      "method": "POST",
+      "description": "OAuth token endpoint (compatibility)."
+    },
+    {
+      "path": "/oauth/introspect",
+      "method": "POST",
+      "description": "OAuth introspection endpoint (compatibility)."
+    },
+    {
+      "path": "/oauth/revoke",
+      "method": "POST",
+      "description": "OAuth token revocation endpoint (compatibility)."
+    },
+    {
+      "path": "/manifest",
+      "method": "GET",
+      "description": "Fetch the MCP manifest."
+    },
+    {
+      "path": "/.well-known/jwks.json",
+      "method": "GET",
+      "description": "JWKS endpoint for OAuth compatibility."
+    },
+    {
+      "path": "/oauth/authorize",
+      "method": "GET",
+      "description": "OAuth authorization endpoint (compatibility)."
+    },
+    {
+      "path": "/authorized",
+      "method": "GET",
+      "description": "OAuth authorization callback endpoint (compatibility)."
     }
-      ,
-      {
-        "path": "/.well-known/mcp/register",
-        "method": "POST",
-        "description": "Connector registration endpoint (compatibility)."
-      },
-      {
-        "path": "/register",
-        "method": "POST",
-        "description": "Connector registration endpoint (compatibility)."
-      }
   ]
 }

@@ -1,5 +1,6 @@
 const express = require('express');
 const dotenv = require('dotenv');
+const crypto = require('crypto');
 const { createWordPressClient } = require('./src/wordpress');
 const manifest = require('./mcp-manifest.json');
 
@@ -23,6 +24,31 @@ const wp = createWordPressClient({
   username: WP_USERNAME,
   password: WP_APP_PASSWORD,
 });
+
+function buildRegistrationResponse(req, client_id, client_secret) {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  return {
+    client_id,
+    client_secret,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    client_secret_expires_at: 0,
+    token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
+    grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
+    response_types: req.body.response_types || ['code'],
+    redirect_uris: req.body.redirect_uris || [],
+    client_name: req.body.client_name || 'claude',
+    application_type: req.body.application_type || 'web',
+    scope: req.body.scope || 'openid',
+    token_endpoint: `${baseUrl}/oauth/token`,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    registration_client_uri: `${baseUrl}${req.path}`,
+    registration_access_token: crypto.randomBytes(24).toString('hex'),
+    issuer: baseUrl,
+    jwks_uri: `${baseUrl}/.well-known/jwks.json`,
+    introspection_endpoint: `${baseUrl}/oauth/introspect`,
+    revocation_endpoint: `${baseUrl}/oauth/revoke`,
+  };
+}
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', site: WP_URL });
@@ -68,6 +94,36 @@ app.get('/manifest', (req, res) => {
 });
 
 // Compatibility endpoints for connector registration probes
+function buildRegistrationResponse(req, client_id, client_secret) {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const redirectUris = Array.isArray(req.body.redirect_uris) ? [...req.body.redirect_uris] : [];
+  if (!redirectUris.length) {
+    redirectUris.push(`${baseUrl}/authorized`);
+  }
+
+  return {
+    client_id,
+    client_secret,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    client_secret_expires_at: 0,
+    token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
+    grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
+    response_types: req.body.response_types || ['code'],
+    redirect_uris: redirectUris,
+    client_name: req.body.client_name || 'claude',
+    application_type: req.body.application_type || 'web',
+    scope: req.body.scope || 'openid',
+    token_endpoint: `${baseUrl}/oauth/token`,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    registration_client_uri: `${baseUrl}${req.path}`,
+    registration_access_token: crypto.randomBytes(24).toString('hex'),
+    issuer: baseUrl,
+    jwks_uri: `${baseUrl}/.well-known/jwks.json`,
+    introspection_endpoint: `${baseUrl}/oauth/introspect`,
+    revocation_endpoint: `${baseUrl}/oauth/revoke`,
+  };
+}
+
 app.post('/.well-known/mcp/register', (req, res) => {
   console.log('=== MCP register probe received at /.well-known/mcp/register ===');
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
@@ -79,22 +135,9 @@ app.post('/.well-known/mcp/register', (req, res) => {
     console.error('Failed to write debug log', e.message);
   }
   try {
-    const crypto = require('crypto');
-    const gen = () => crypto.randomBytes(16).toString('hex');
-    const client_id = `claude-${gen()}`;
-    const client_secret = gen();
-    const resp = {
-      client_id,
-      client_secret,
-      client_id_issued_at: Math.floor(Date.now() / 1000),
-      client_secret_expires_at: 0,
-      token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
-      grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
-      response_types: req.body.response_types || ['code'],
-      redirect_uris: req.body.redirect_uris || [],
-      client_name: req.body.client_name || 'claude',
-      application_type: req.body.application_type || 'web',
-    };
+    const client_id = `claude-${crypto.randomBytes(16).toString('hex')}`;
+    const client_secret = crypto.randomBytes(16).toString('hex');
+    const resp = buildRegistrationResponse(req, client_id, client_secret);
     try {
       const fs = require('fs');
       fs.appendFileSync('debug-register.log', `RESPONSE: ${JSON.stringify(resp)}\n`);
@@ -119,22 +162,9 @@ app.post('/register', (req, res) => {
     console.error('Failed to write debug log', e.message);
   }
   try {
-    const crypto = require('crypto');
-    const gen = () => crypto.randomBytes(16).toString('hex');
-    const client_id = `claude-${gen()}`;
-    const client_secret = gen();
-    const resp = {
-      client_id,
-      client_secret,
-      client_id_issued_at: Math.floor(Date.now() / 1000),
-      client_secret_expires_at: 0,
-      token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
-      grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
-      response_types: req.body.response_types || ['code'],
-      redirect_uris: req.body.redirect_uris || [],
-      client_name: req.body.client_name || 'claude',
-      application_type: req.body.application_type || 'web',
-    };
+    const client_id = `claude-${crypto.randomBytes(16).toString('hex')}`;
+    const client_secret = crypto.randomBytes(16).toString('hex');
+    const resp = buildRegistrationResponse(req, client_id, client_secret);
     try {
       const fs = require('fs');
       fs.appendFileSync('debug-register.log', `RESPONSE: ${JSON.stringify(resp)}\n`);
@@ -146,6 +176,36 @@ app.post('/register', (req, res) => {
     res.status(500).json({ ok: false, error: 'registration response failed' });
     return;
   }
+});
+
+app.post('/oauth/token', (req, res) => {
+  const accessToken = crypto.randomBytes(24).toString('hex');
+  const refreshToken = crypto.randomBytes(24).toString('hex');
+  res.json({
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: 3600,
+    refresh_token: refreshToken,
+    scope: req.body.scope || 'openid',
+  });
+});
+
+app.post('/oauth/introspect', (req, res) => {
+  res.json({
+    active: true,
+    scope: req.body.scope || 'openid',
+    client_id: req.body.client_id || 'claude',
+  });
+});
+
+app.post('/oauth/revoke', (req, res) => {
+  res.status(200).json({
+    revoked: true,
+  });
+});
+
+app.get('/.well-known/jwks.json', (req, res) => {
+  res.json({ keys: [] });
 });
 
 app.post('/create-post', async (req, res) => {
@@ -229,9 +289,8 @@ app.get('/authorized', (req, res) => {
 });
 
 app.get('/oauth/authorize', (req, res) => {
-  const info = { path: req.path, query: req.query };
-  res.setHeader('Content-Type', 'text/html');
-  res.send(`<html><body><h2>OAuth Authorize (compat)</h2><pre>${JSON.stringify(info,null,2)}</pre></body></html>`);
+  const redirectUrl = `/authorized${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`;
+  res.redirect(302, redirectUrl);
 });
 
 app.listen(PORT, '0.0.0.0', () => {

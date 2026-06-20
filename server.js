@@ -217,6 +217,23 @@ app.post('/create-post-with-image', async (req, res) => {
   }
 });
 
+// OAuth compatibility routes to avoid 404s during connector flows
+app.get('/authorized', (req, res) => {
+  const info = {
+    path: req.path,
+    query: req.query,
+    message: 'Authorization callback received. If this was part of an OAuth flow, Claude should continue.'
+  };
+  res.setHeader('Content-Type', 'text/html');
+  res.send(`<html><body><h2>WordPress MCP Server</h2><pre>${JSON.stringify(info,null,2)}</pre></body></html>`);
+});
+
+app.get('/oauth/authorize', (req, res) => {
+  const info = { path: req.path, query: req.query };
+  res.setHeader('Content-Type', 'text/html');
+  res.send(`<html><body><h2>OAuth Authorize (compat)</h2><pre>${JSON.stringify(info,null,2)}</pre></body></html>`);
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`WordPress MCP Server listening on http://0.0.0.0:${PORT}`);
 });

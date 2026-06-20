@@ -58,6 +58,25 @@
       }
     },
     {
+      "path": "/posts",
+      "method": "GET",
+      "description": "List WordPress posts with optional query filters.",
+      "parameters": {
+        "page": "integer (optional)",
+        "per_page": "integer (optional)",
+        "status": "string (optional)",
+        "search": "string (optional)"
+      }
+    },
+    {
+      "path": "/posts/{postId}",
+      "method": "GET",
+      "description": "Fetch a single WordPress post by ID.",
+      "parameters": {
+        "postId": "integer"
+      }
+    },
+    {
       "path": "/create-post-with-image",
       "method": "POST",
       "description": "Create a post and upload an image to use as featured media.",

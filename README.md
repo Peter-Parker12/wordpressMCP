@@ -54,6 +54,8 @@ docker run --env-file .env -p 9808:9808 wordpress-mcp
 
 ## API Endpoints
 
+- `GET /posts`
+- `GET /posts/:postId`
 - `POST /create-post`
 - `POST /update-post`
 - `POST /upload-image`
@@ -85,6 +87,26 @@ Create a post with featured media:
 curl http://localhost:4000/create-post-with-image \
   -H "Content-Type: application/json" \
   -d '{"title":"Post with image","content":"Blog content","imageUrl":"https://example.com/image.jpg","fileName":"image.jpg"}'
+```
+
+List posts:
+
+```bash
+curl http://localhost:4000/posts
+```
+
+Get a specific post:
+
+```bash
+curl http://localhost:4000/posts/123
+```
+
+Update a post:
+
+```bash
+curl http://localhost:4000/update-post \
+  -H "Content-Type: application/json" \
+  -d '{"postId":123,"title":"Updated title","content":"Updated content"}'
 ```
 
 ## Claude / MCP integration

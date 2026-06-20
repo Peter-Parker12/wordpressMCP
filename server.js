@@ -45,6 +45,24 @@ app.get('/check-wp-auth', async (req, res) => {
   }
 });
 
+app.get('/posts', async (req, res) => {
+  try {
+    const posts = await wp.getPosts(req.query);
+    res.json(posts);
+  } catch (error) {
+    res.status(500).json({ error: error.message, details: error.response?.data || null });
+  }
+});
+
+app.get('/posts/:postId', async (req, res) => {
+  try {
+    const post = await wp.getPost(req.params.postId);
+    res.json(post);
+  } catch (error) {
+    res.status(500).json({ error: error.message, details: error.response?.data || null });
+  }
+});
+
 app.get('/manifest', (req, res) => {
   res.json(manifest);
 });

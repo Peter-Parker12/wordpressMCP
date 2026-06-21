@@ -23,10 +23,17 @@ const PORT = process.env.PORT || 4000;
 const WP_URL = process.env.WP_URL;
 const WP_USERNAME = process.env.WP_USERNAME;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
+const CLAUDE_OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID;
+const CLAUDE_OAUTH_CLIENT_SECRET = process.env.CLAUDE_OAUTH_CLIENT_SECRET;
+const CLAUDE_OAUTH_REDIRECT_URI = process.env.CLAUDE_OAUTH_REDIRECT_URI;
 
 if (!WP_URL || !WP_USERNAME || !WP_APP_PASSWORD) {
   console.error('Missing WordPress configuration in .env. Please set WP_URL, WP_USERNAME, and WP_APP_PASSWORD.');
   process.exit(1);
+}
+
+if (!CLAUDE_OAUTH_CLIENT_ID || !CLAUDE_OAUTH_CLIENT_SECRET) {
+  console.warn('Warning: CLAUDE_OAUTH_CLIENT_ID and CLAUDE_OAUTH_CLIENT_SECRET are not configured. Dynamic registration will still work, but Claude may require manual connector configuration.');
 }
 
 const wp = createWordPressClient({
@@ -184,9 +191,12 @@ function buildRegistrationResponse(req, client_id, client_secret) {
     redirectUris.push(`${baseUrl}/authorized`);
   }
 
+  const resolvedClientId = CLAUDE_OAUTH_CLIENT_ID || client_id;
+  const resolvedClientSecret = CLAUDE_OAUTH_CLIENT_SECRET || client_secret;
+
   return {
-    client_id,
-    client_secret,
+    client_id: resolvedClientId,
+    client_secret: resolvedClientSecret,
     client_id_issued_at: Math.floor(Date.now() / 1000),
     client_secret_expires_at: 0,
     token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
@@ -218,8 +228,8 @@ app.post('/.well-known/mcp/register', (req, res) => {
     console.error('Failed to write debug log', e.message);
   }
   try {
-    const client_id = `claude-${crypto.randomBytes(16).toString('hex')}`;
-    const client_secret = crypto.randomBytes(16).toString('hex');
+    const client_id = CLAUDE_OAUTH_CLIENT_ID || `claude-${crypto.randomBytes(16).toString('hex')}`;
+    const client_secret = CLAUDE_OAUTH_CLIENT_SECRET || crypto.randomBytes(16).toString('hex');
     const resp = buildRegistrationResponse(req, client_id, client_secret);
     try {
       const fs = require('fs');
@@ -245,8 +255,8 @@ app.post('/register', (req, res) => {
     console.error('Failed to write debug log', e.message);
   }
   try {
-    const client_id = `claude-${crypto.randomBytes(16).toString('hex')}`;
-    const client_secret = crypto.randomBytes(16).toString('hex');
+    const client_id = CLAUDE_OAUTH_CLIENT_ID || `claude-${crypto.randomBytes(16).toString('hex')}`;
+    const client_secret = CLAUDE_OAUTH_CLIENT_SECRET || crypto.randomBytes(16).toString('hex');
     const resp = buildRegistrationResponse(req, client_id, client_secret);
     try {
       const fs = require('fs');
@@ -277,6 +287,14 @@ const handleTokenRequest = (req, res) => {
   } = req.body;
 
   if (grant_type === 'authorization_code') {
+    if (CLAUDE_OAUTH_CLIENT_ID && client_id !== CLAUDE_OAUTH_CLIENT_ID) {
+      return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_id' });
+    }
+
+    if (CLAUDE_OAUTH_CLIENT_SECRET && client_secret !== CLAUDE_OAUTH_CLIENT_SECRET) {
+      return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_secret' });
+    }
+
     const auth = authCodes.get(code);
     if (!auth) {
       return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
@@ -495,6 +513,14 @@ app.get(['/authorize', '/oauth/authorize'], (req, res) => {
 
   if (response_type !== 'code' || !client_id || !redirect_uri) {
     return res.status(400).send('Missing required OAuth authorize parameters');
+  }
+
+  if (CLAUDE_OAUTH_CLIENT_ID && client_id !== CLAUDE_OAUTH_CLIENT_ID) {
+    return res.status(400).send('Invalid client_id');
+  }
+
+  if (CLAUDE_OAUTH_REDIRECT_URI && redirect_uri !== CLAUDE_OAUTH_REDIRECT_URI) {
+    return res.status(400).send('Invalid redirect_uri');
   }
 
   const authCode = generateCode();

@@ -117,7 +117,35 @@ app.get('/.well-known/mcp', (req, res) => {
 
 app.post('/', (req, res) => {
   console.log('=== MCP runtime POST / received ===');
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
   console.log('Body:', JSON.stringify(req.body, null, 2));
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.error('Missing or invalid Authorization header');
+    return res.status(401).json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32600,
+        message: 'Missing Authorization header',
+      },
+    });
+  }
+
+  const token = authHeader.slice(7);
+  const tokenInfo = accessTokens.get(token);
+  if (!tokenInfo) {
+    console.error('Invalid or expired access token:', token.slice(0, 8) + '...');
+    return res.status(401).json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32600,
+        message: 'Invalid or expired access token',
+      },
+    });
+  }
+
+  console.log('Token validated for client:', tokenInfo.client_id);
 
   const { method, id, params } = req.body;
   if (method === 'initialize') {

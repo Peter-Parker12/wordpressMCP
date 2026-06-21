@@ -49,16 +49,63 @@ function normalizeBase64Url(input) {
     .replace(/=+$/, '');
 }
 
+const sseClients = new Set();
+
+function sendEvent(res, data) {
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', site: WP_URL });
 });
 
 app.get('/', (req, res) => {
+  if (req.headers.accept && req.headers.accept.includes('text/event-stream')) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.write('\n');
+    sseClients.add(res);
+
+    req.on('close', () => {
+      sseClients.delete(res);
+    });
+
+    sendEvent(res, { type: 'ready' });
+    return;
+  }
+
   res.json(manifest);
 });
 
 app.get('/.well-known/mcp', (req, res) => {
   res.json(manifest);
+});
+
+app.post('/', (req, res) => {
+  console.log('=== MCP runtime POST / received ===');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+
+  const { method, id, params } = req.body;
+  if (method === 'initialize') {
+    const result = {
+      protocolVersion: params?.protocolVersion || '2025-11-25',
+      capabilities: {},
+      serverName: 'WordPress MCP Server',
+    };
+    return res.json({ jsonrpc: '2.0', id, result });
+  }
+
+  return res.json({
+    jsonrpc: '2.0',
+    id,
+    error: {
+      code: -32601,
+      message: `Method not found: ${method}`,
+    },
+  });
 });
 
 app.get('/check-wp-auth', async (req, res) => {

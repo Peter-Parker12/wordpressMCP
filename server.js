@@ -233,13 +233,16 @@ const handleTokenRequest = (req, res) => {
       createdAt: Date.now(),
     });
 
-    return res.json({
+    const tokenResponse = {
       access_token: accessToken,
       token_type: 'Bearer',
       expires_in: 3600,
       refresh_token: newRefreshToken,
       scope: auth.scope || 'openid',
-    });
+    };
+    console.log('=== OAuth token response ===');
+    console.log(JSON.stringify(tokenResponse, null, 2));
+    return res.json(tokenResponse);
   }
 
   if (grant_type === 'refresh_token') {
@@ -249,13 +252,16 @@ const handleTokenRequest = (req, res) => {
       scope: req.body.scope || 'openid',
       createdAt: Date.now(),
     });
-    return res.json({
+    const tokenResponse = {
       access_token: newAccessToken,
       token_type: 'Bearer',
       expires_in: 3600,
       refresh_token: refresh_token || generateCode(),
       scope: req.body.scope || 'openid',
-    });
+    };
+    console.log('=== OAuth refresh token response ===');
+    console.log(JSON.stringify(tokenResponse, null, 2));
+    return res.json(tokenResponse);
   }
 
   return res.status(400).json({ error: 'unsupported_grant_type' });

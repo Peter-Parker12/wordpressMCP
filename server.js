@@ -10,6 +10,15 @@ const app = express();
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: false }));
 
+app.use((req, res, next) => {
+  console.log(`=== REQUEST ${req.method} ${req.originalUrl} ===`);
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  if (req.method !== 'GET') {
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+  }
+  next();
+});
+
 const PORT = process.env.PORT || 4000;
 const WP_URL = process.env.WP_URL;
 const WP_USERNAME = process.env.WP_USERNAME;

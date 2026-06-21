@@ -11,6 +11,16 @@ app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, MCP-Protocol-Version, Accept');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+app.use((req, res, next) => {
   console.log(`=== REQUEST ${req.method} ${req.originalUrl} ===`);
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
   if (req.method !== 'GET') {

@@ -56,6 +56,20 @@ function normalizeBase64Url(input) {
     .replace(/=+$/, '');
 }
 
+function getClientCredentials(req) {
+  let clientId = req.body.client_id;
+  let clientSecret = req.body.client_secret;
+
+  if (req.headers.authorization && req.headers.authorization.startsWith('Basic ')) {
+    const decoded = Buffer.from(req.headers.authorization.slice(6), 'base64').toString('utf8');
+    const [id, secret] = decoded.split(':');
+    if (id) clientId = id;
+    if (secret) clientSecret = secret;
+  }
+
+  return { clientId, clientSecret };
+}
+
 const sseClients = new Set();
 
 function sendEvent(res, data) {
@@ -287,11 +301,13 @@ const handleTokenRequest = (req, res) => {
   } = req.body;
 
   if (grant_type === 'authorization_code') {
-    if (CLAUDE_OAUTH_CLIENT_ID && client_id !== CLAUDE_OAUTH_CLIENT_ID) {
+    const { clientId, clientSecret } = getClientCredentials(req);
+
+    if (CLAUDE_OAUTH_CLIENT_ID && clientId !== CLAUDE_OAUTH_CLIENT_ID) {
       return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_id' });
     }
 
-    if (CLAUDE_OAUTH_CLIENT_SECRET && client_secret !== CLAUDE_OAUTH_CLIENT_SECRET) {
+    if (CLAUDE_OAUTH_CLIENT_SECRET && clientSecret !== CLAUDE_OAUTH_CLIENT_SECRET) {
       return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_secret' });
     }
 

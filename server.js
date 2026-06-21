@@ -26,6 +26,20 @@ const wp = createWordPressClient({
   password: WP_APP_PASSWORD,
 });
 
+const authCodes = new Map();
+const accessTokens = new Map();
+
+function generateCode() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+function normalizeBase64Url(input) {
+  return input.toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', site: WP_URL });
 });
@@ -178,25 +192,84 @@ app.post('/oauth/token', (req, res) => {
   console.log('=== OAuth token request received ===');
   console.log('Body:', JSON.stringify(req.body, null, 2));
 
-  const accessToken = crypto.randomBytes(24).toString('hex');
-  const refreshToken = crypto.randomBytes(24).toString('hex');
-  res.json({
-    access_token: accessToken,
-    token_type: 'Bearer',
-    expires_in: 3600,
-    refresh_token: refreshToken,
-    scope: req.body.scope || 'openid',
-  });
+  const {
+    grant_type,
+    code,
+    redirect_uri,
+    client_id,
+    client_secret,
+    code_verifier,
+    refresh_token,
+  } = req.body;
+
+  if (grant_type === 'authorization_code') {
+    const auth = authCodes.get(code);
+    if (!auth) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
+    }
+
+    if (redirect_uri && redirect_uri !== auth.redirect_uri) {
+      return res.status(400).json({ error: 'invalid_request', error_description: 'redirect_uri does not match' });
+    }
+
+    if (auth.code_challenge) {
+      if (!code_verifier) {
+        return res.status(400).json({ error: 'invalid_request', error_description: 'code_verifier is required' });
+      }
+      const hashed = crypto.createHash('sha256').update(code_verifier).digest();
+      const actualChallenge = normalizeBase64Url(hashed);
+      if (actualChallenge !== auth.code_challenge) {
+        return res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
+      }
+    }
+
+    authCodes.delete(code);
+    const accessToken = generateCode();
+    const newRefreshToken = generateCode();
+    accessTokens.set(accessToken, {
+      client_id: auth.client_id,
+      scope: auth.scope || 'openid',
+      createdAt: Date.now(),
+    });
+
+    return res.json({
+      access_token: accessToken,
+      token_type: 'Bearer',
+      expires_in: 3600,
+      refresh_token: newRefreshToken,
+      scope: auth.scope || 'openid',
+    });
+  }
+
+  if (grant_type === 'refresh_token') {
+    const newAccessToken = generateCode();
+    accessTokens.set(newAccessToken, {
+      client_id: client_id || 'claude',
+      scope: req.body.scope || 'openid',
+      createdAt: Date.now(),
+    });
+    return res.json({
+      access_token: newAccessToken,
+      token_type: 'Bearer',
+      expires_in: 3600,
+      refresh_token: refresh_token || generateCode(),
+      scope: req.body.scope || 'openid',
+    });
+  }
+
+  return res.status(400).json({ error: 'unsupported_grant_type' });
 });
 
 app.post('/oauth/introspect', (req, res) => {
   console.log('=== OAuth introspection request received ===');
   console.log('Body:', JSON.stringify(req.body, null, 2));
 
+  const token = req.body.token;
+  const info = accessTokens.get(token);
   res.json({
-    active: true,
-    scope: req.body.scope || 'openid',
-    client_id: req.body.client_id || 'claude',
+    active: Boolean(info),
+    scope: info?.scope || 'openid',
+    client_id: info?.client_id || req.body.client_id || 'claude',
   });
 });
 
@@ -302,8 +375,35 @@ app.get(['/authorize', '/oauth/authorize'], (req, res) => {
   console.log('Path:', req.path);
   console.log('Query:', req.query);
 
-  const redirectUrl = `/authorized${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`;
-  res.redirect(302, redirectUrl);
+  const {
+    response_type,
+    client_id,
+    redirect_uri,
+    code_challenge,
+    code_challenge_method,
+    state,
+    scope,
+  } = req.query;
+
+  if (response_type !== 'code' || !client_id || !redirect_uri) {
+    return res.status(400).send('Missing required OAuth authorize parameters');
+  }
+
+  const authCode = generateCode();
+  authCodes.set(authCode, {
+    client_id,
+    redirect_uri,
+    code_challenge,
+    code_challenge_method,
+    scope,
+    createdAt: Date.now(),
+  });
+
+  const separator = redirect_uri.includes('?') ? '&' : '?';
+  const destination = `${redirect_uri}${separator}code=${encodeURIComponent(authCode)}${state ? `&state=${encodeURIComponent(state)}` : ''}`;
+
+  console.log('Redirecting to:', destination);
+  res.redirect(302, destination);
 });
 
 app.listen(PORT, '0.0.0.0', () => {

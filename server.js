@@ -1,339 +1,414 @@
 const express = require('express');
-const dotenv = require('dotenv');
 const crypto = require('crypto');
+const dotenv = require('dotenv');
 const { createWordPressClient } = require('./src/wordpress');
-const manifest = require('./mcp-manifest.json');
+const tokens = require('./src/tokens');
 
 dotenv.config();
 
-const app = express();
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ extended: false }));
-
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, MCP-Protocol-Version, Accept');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-  next();
-});
-
-app.use((req, res, next) => {
-  console.log(`=== REQUEST ${req.method} ${req.originalUrl} ===`);
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  if (req.method !== 'GET') {
-    console.log('Body:', JSON.stringify(req.body, null, 2));
-  }
-  next();
-});
-
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 9809;
 const WP_URL = process.env.WP_URL;
 const WP_USERNAME = process.env.WP_USERNAME;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
-const CLAUDE_OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID;
-const CLAUDE_OAUTH_CLIENT_SECRET = process.env.CLAUDE_OAUTH_CLIENT_SECRET;
-const CLAUDE_OAUTH_REDIRECT_URI = process.env.CLAUDE_OAUTH_REDIRECT_URI;
+const MCP_TOKEN = process.env.MCP_TOKEN;
+const CLAUDE_CLIENT_ID = process.env.CLAUDE_CLIENT_ID;
+const CLAUDE_CLIENT_SECRET = process.env.CLAUDE_CLIENT_SECRET;
 
 if (!WP_URL || !WP_USERNAME || !WP_APP_PASSWORD) {
-  console.error('Missing WordPress configuration in .env. Please set WP_URL, WP_USERNAME, and WP_APP_PASSWORD.');
+  console.error('ERROR: Missing required env vars. Set WP_URL, WP_USERNAME, and WP_APP_PASSWORD in .env');
+  process.exit(1);
+}
+if (!MCP_TOKEN) {
+  console.error('ERROR: MCP_TOKEN not set. Generate one with: openssl rand -hex 32');
+  process.exit(1);
+}
+if (!CLAUDE_CLIENT_ID || !CLAUDE_CLIENT_SECRET) {
+  console.error('ERROR: CLAUDE_CLIENT_ID and CLAUDE_CLIENT_SECRET not set. Choose any values and enter the same in Claude connector settings.');
   process.exit(1);
 }
 
-if (!CLAUDE_OAUTH_CLIENT_ID || !CLAUDE_OAUTH_CLIENT_SECRET) {
-  console.warn('Warning: CLAUDE_OAUTH_CLIENT_ID and CLAUDE_OAUTH_CLIENT_SECRET are not configured. Dynamic registration will still work, but Claude may require manual connector configuration.');
-}
+const wp = createWordPressClient({ url: WP_URL, username: WP_USERNAME, password: WP_APP_PASSWORD });
+const app = express();
 
-const wp = createWordPressClient({
-  url: WP_URL,
-  username: WP_USERNAME,
-  password: WP_APP_PASSWORD,
+// ─── Middleware ───────────────────────────────────────────────────────────────
+
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: false }));
+
+// CORS — required for Claude's browser UI widget
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, MCP-Protocol-Version, Accept');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
 });
 
-const authCodes = new Map();
-const accessTokens = new Map();
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
 
-function generateCode() {
-  return crypto.randomBytes(24).toString('hex');
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getBaseUrl(req) {
+  let scheme = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  if (!scheme && req.headers['cf-visitor']) {
+    try { scheme = JSON.parse(req.headers['cf-visitor']).scheme; } catch {}
+  }
+  if (!scheme) scheme = req.protocol;
+  return `${scheme}://${req.get('host')}`;
 }
 
-function normalizeBase64Url(input) {
-  return input.toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+function randomToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString('hex');
 }
 
-function getClientCredentials(req) {
-  let clientId = req.body.client_id;
-  let clientSecret = req.body.client_secret;
+function base64url(buf) {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
-  if (req.headers.authorization && req.headers.authorization.startsWith('Basic ')) {
-    const decoded = Buffer.from(req.headers.authorization.slice(6), 'base64').toString('utf8');
-    const [id, secret] = decoded.split(':');
-    if (id) clientId = id;
-    if (secret) clientSecret = secret;
+// ─── OAuth Discovery ──────────────────────────────────────────────────────────
+
+// Tells Claude where the authorization server lives
+app.get('/.well-known/oauth-protected-resource', (req, res) => {
+  const base = getBaseUrl(req);
+  res.json({ resource: base, authorization_servers: [base] });
+});
+
+// Authorization server metadata (RFC 8414)
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  const base = getBaseUrl(req);
+  res.json({
+    issuer: base,
+    authorization_endpoint: `${base}/oauth/authorize`,
+    token_endpoint: `${base}/oauth/token`,
+    registration_endpoint: `${base}/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+    scopes_supported: ['mcp'],
+    code_challenge_methods_supported: ['S256'],
+  });
+});
+
+// ─── Dynamic Client Registration (RFC 7591) ───────────────────────────────────
+
+// Returns the pre-configured client credentials so Claude uses the values you set in .env
+app.post('/register', (req, res) => {
+  const redirectUris = Array.isArray(req.body.redirect_uris) ? req.body.redirect_uris : [];
+  const base = getBaseUrl(req);
+  console.log(`  Client registration — returning pre-configured client_id: ${CLAUDE_CLIENT_ID}`);
+  res.status(201).json({
+    client_id: CLAUDE_CLIENT_ID,
+    client_secret: CLAUDE_CLIENT_SECRET,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    client_secret_expires_at: 0,
+    redirect_uris: redirectUris,
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'client_secret_post',
+    registration_client_uri: `${base}/register/${CLAUDE_CLIENT_ID}`,
+  });
+});
+
+// ─── Authorization Endpoint ───────────────────────────────────────────────────
+
+// Auto-approves — we control this server and trust Claude
+app.get('/oauth/authorize', (req, res) => {
+  const { response_type, client_id, redirect_uri, code_challenge, code_challenge_method, state, scope } = req.query;
+
+  if (response_type !== 'code') return res.status(400).send('Only response_type=code is supported');
+  if (!redirect_uri) return res.status(400).send('Missing redirect_uri');
+
+  const code = randomToken(32);
+  tokens.saveAuthCode(code, { client_id, redirect_uri, code_challenge, code_challenge_method, scope });
+  console.log(`  Auth code issued for client: ${client_id}`);
+
+  const sep = redirect_uri.includes('?') ? '&' : '?';
+  const dest = `${redirect_uri}${sep}code=${encodeURIComponent(code)}${state ? `&state=${encodeURIComponent(state)}` : ''}`;
+  res.redirect(302, dest);
+});
+
+// ─── Token Endpoint ───────────────────────────────────────────────────────────
+
+app.post('/oauth/token', (req, res) => {
+  const { grant_type, code, code_verifier, redirect_uri, refresh_token, client_id, client_secret } = req.body;
+
+  // Validate pre-configured client credentials
+  if (client_id && client_id !== CLAUDE_CLIENT_ID) {
+    return res.status(400).json({ error: 'invalid_client', error_description: 'Unknown client_id' });
+  }
+  if (client_secret && client_secret !== CLAUDE_CLIENT_SECRET) {
+    return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_secret' });
   }
 
-  return { clientId, clientSecret };
-}
-
-const sseClients = new Set();
-
-function sendEvent(res, data) {
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-setInterval(() => {
-  for (const client of sseClients) {
-    try {
-      sendEvent(client, { type: 'ping' });
-    } catch (err) {
-      sseClients.delete(client);
+  if (grant_type === 'authorization_code') {
+    const authCode = tokens.getAuthCode(code);
+    if (!authCode) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
     }
-  }
-}, 15000);
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', site: WP_URL });
-});
+    // PKCE verification (RFC 7636)
+    if (authCode.code_challenge) {
+      if (!code_verifier) {
+        return res.status(400).json({ error: 'invalid_request', error_description: 'code_verifier required' });
+      }
+      const digest = crypto.createHash('sha256').update(code_verifier).digest();
+      if (base64url(digest) !== authCode.code_challenge) {
+        return res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
+      }
+    }
 
-app.get('/', (req, res) => {
-  if (req.headers.accept && req.headers.accept.includes('text/event-stream')) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
+    if (redirect_uri && redirect_uri !== authCode.redirect_uri) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
+    }
+
+    tokens.deleteAuthCode(code);
+
+    const accessToken = randomToken(32);
+    const newRefreshToken = randomToken(32);
+    tokens.saveToken(accessToken, { clientId: authCode.client_id, scope: authCode.scope || 'mcp', refreshToken: newRefreshToken });
+    console.log(`  Access token issued for client: ${authCode.client_id}`);
+
+    return res.json({
+      access_token: accessToken,
+      token_type: 'Bearer',
+      expires_in: 86400,
+      refresh_token: newRefreshToken,
+      scope: authCode.scope || 'mcp',
     });
-    res.write('\n');
-    sseClients.add(res);
-
-    req.on('close', () => {
-      sseClients.delete(res);
-    });
-
-    sendEvent(res, { type: 'ready' });
-    return;
   }
 
-  res.json(manifest);
+  if (grant_type === 'refresh_token') {
+    const stored = tokens.getTokenByRefresh(refresh_token);
+    if (stored) tokens.deleteToken(stored.accessToken);
+
+    const newAccessToken = randomToken(32);
+    const newRefreshToken = randomToken(32);
+    const clientId = stored?.clientId || 'claude';
+    const scope = stored?.scope || 'mcp';
+    tokens.saveToken(newAccessToken, { clientId, scope, refreshToken: newRefreshToken });
+    console.log(`  Token refreshed for client: ${clientId}`);
+
+    return res.json({
+      access_token: newAccessToken,
+      token_type: 'Bearer',
+      expires_in: 86400,
+      refresh_token: newRefreshToken,
+      scope,
+    });
+  }
+
+  return res.status(400).json({ error: 'unsupported_grant_type' });
 });
 
-app.get('/.well-known/mcp', (req, res) => {
-  res.json(manifest);
-});
+// ─── MCP Tools ────────────────────────────────────────────────────────────────
 
 const MCP_TOOLS = [
   {
-    name: 'create_post',
-    description: 'Create a new WordPress post.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        title: { type: 'string', description: 'Post title' },
-        content: { type: 'string', description: 'Post content (HTML)' },
-        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)' },
-        excerpt: { type: 'string', description: 'Post excerpt' },
-        categories: { type: 'array', items: { type: 'integer' }, description: 'Array of category IDs' },
-        tags: { type: 'array', items: { type: 'integer' }, description: 'Array of tag IDs' },
-        featured_media: { type: 'integer', description: 'Media ID for featured image' },
-      },
-      required: ['title', 'content'],
-    },
-  },
-  {
-    name: 'update_post',
-    description: 'Update an existing WordPress post.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        postId: { type: 'integer', description: 'ID of the post to update' },
-        title: { type: 'string', description: 'New post title' },
-        content: { type: 'string', description: 'New post content (HTML)' },
-        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status' },
-        excerpt: { type: 'string', description: 'Post excerpt' },
-        categories: { type: 'array', items: { type: 'integer' }, description: 'Array of category IDs' },
-        tags: { type: 'array', items: { type: 'integer' }, description: 'Array of tag IDs' },
-        featured_media: { type: 'integer', description: 'Media ID for featured image' },
-      },
-      required: ['postId'],
-    },
-  },
-  {
     name: 'get_posts',
-    description: 'List WordPress posts with optional filters.',
+    description: 'Get a list of WordPress posts. Returns ID, title, status, date, and excerpt.',
     inputSchema: {
       type: 'object',
       properties: {
-        page: { type: 'integer', description: 'Page number' },
-        per_page: { type: 'integer', description: 'Posts per page (max 100)' },
-        status: { type: 'string', description: 'Filter by post status' },
-        search: { type: 'string', description: 'Search term' },
+        per_page: { type: 'integer', description: 'Posts to return (default 10, max 100)', default: 10 },
+        page: { type: 'integer', description: 'Page number for pagination', default: 1 },
+        status: { type: 'string', enum: ['publish', 'draft', 'pending', 'private', 'any'], description: 'Filter by status', default: 'any' },
+        search: { type: 'string', description: 'Search keyword' },
       },
     },
   },
   {
     name: 'get_post',
-    description: 'Fetch a single WordPress post by ID.',
+    description: 'Get the full content of a single WordPress post by its ID.',
     inputSchema: {
       type: 'object',
+      required: ['id'],
       properties: {
-        postId: { type: 'integer', description: 'Post ID' },
-      },
-      required: ['postId'],
-    },
-  },
-  {
-    name: 'upload_media',
-    description: 'Upload an image to the WordPress media library.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        imageUrl: { type: 'string', description: 'URL of the image to upload' },
-        imageBase64: { type: 'string', description: 'Base64-encoded image data' },
-        fileName: { type: 'string', description: 'File name for the uploaded image' },
-        mimeType: { type: 'string', description: 'MIME type (e.g. image/jpeg)' },
+        id: { type: 'integer', description: 'The post ID' },
       },
     },
   },
   {
-    name: 'set_featured_image',
-    description: 'Set the featured image of a WordPress post.',
+    name: 'create_post',
+    description: 'Create a new WordPress post.',
+    inputSchema: {
+      type: 'object',
+      required: ['title', 'content'],
+      properties: {
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post body content (HTML supported)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+      },
+    },
+  },
+  {
+    name: 'upload_image',
+    description: 'Upload an image to WordPress media library. Provide image_url OR image_base64.',
     inputSchema: {
       type: 'object',
       properties: {
-        postId: { type: 'integer', description: 'Post ID' },
-        mediaId: { type: 'integer', description: 'Media ID to use as featured image' },
+        image_url: { type: 'string', description: 'Public URL of the image to fetch and upload' },
+        image_base64: { type: 'string', description: 'Base64-encoded image data' },
+        filename: { type: 'string', description: 'Filename (e.g. photo.jpg)' },
+        mime_type: { type: 'string', description: 'MIME type (e.g. image/jpeg, image/png)' },
       },
-      required: ['postId', 'mediaId'],
     },
   },
   {
     name: 'create_post_with_image',
-    description: 'Create a WordPress post and upload an image to use as its featured image.',
+    description: 'Upload a featured image and create a WordPress post with it in one step.',
     inputSchema: {
       type: 'object',
+      required: ['title', 'content'],
       properties: {
         title: { type: 'string', description: 'Post title' },
-        content: { type: 'string', description: 'Post content (HTML)' },
-        imageUrl: { type: 'string', description: 'URL of the image to upload' },
-        imageBase64: { type: 'string', description: 'Base64-encoded image data' },
-        fileName: { type: 'string', description: 'File name for the image' },
-        mimeType: { type: 'string', description: 'MIME type (e.g. image/jpeg)' },
-        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)' },
-        excerpt: { type: 'string', description: 'Post excerpt' },
-        categories: { type: 'array', items: { type: 'integer' }, description: 'Array of category IDs' },
-        tags: { type: 'array', items: { type: 'integer' }, description: 'Array of tag IDs' },
+        content: { type: 'string', description: 'Post body content (HTML supported)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+        image_url: { type: 'string', description: 'Public URL of the featured image' },
+        image_base64: { type: 'string', description: 'Base64-encoded featured image data' },
+        filename: { type: 'string', description: 'Image filename' },
+        mime_type: { type: 'string', description: 'Image MIME type' },
       },
-      required: ['title', 'content'],
     },
   },
 ];
 
-async function callTool(name, args) {
+// ─── Tool Runner ──────────────────────────────────────────────────────────────
+
+async function runTool(name, args) {
   switch (name) {
-    case 'create_post':
-      return wp.createPost(args);
-    case 'update_post': {
-      const { postId, ...updates } = args;
-      return wp.updatePost(postId, updates);
+    case 'get_posts': {
+      const posts = await wp.getPosts({
+        per_page: args.per_page || 10,
+        page: args.page || 1,
+        status: args.status || 'any',
+        search: args.search,
+      });
+      return posts.map(p => ({
+        id: p.id,
+        title: p.title?.rendered,
+        status: p.status,
+        date: p.date,
+        link: p.link,
+        excerpt: p.excerpt?.rendered?.replace(/<[^>]+>/g, '').trim(),
+      }));
     }
-    case 'get_posts':
-      return wp.getPosts(args);
-    case 'get_post':
-      return wp.getPost(args.postId);
-    case 'upload_media':
-      return wp.uploadMedia(args);
-    case 'set_featured_image':
-      return wp.setFeaturedImage(args.postId, args.mediaId);
+
+    case 'get_post': {
+      const p = await wp.getPost(args.id);
+      return {
+        id: p.id,
+        title: p.title?.rendered,
+        content: p.content?.rendered,
+        status: p.status,
+        date: p.date,
+        link: p.link,
+        categories: p.categories,
+        tags: p.tags,
+        featured_media: p.featured_media,
+      };
+    }
+
+    case 'create_post': {
+      const p = await wp.createPost(args);
+      return { id: p.id, link: p.link, status: p.status };
+    }
+
+    case 'upload_image': {
+      const media = await wp.uploadMedia({
+        imageUrl: args.image_url,
+        imageBase64: args.image_base64,
+        fileName: args.filename,
+        mimeType: args.mime_type,
+      });
+      return { id: media.id, url: media.source_url, filename: media.slug };
+    }
+
     case 'create_post_with_image': {
-      const { imageUrl, imageBase64, fileName, mimeType, title, content, status, excerpt, categories, tags } = args;
-      const media = await wp.uploadMedia({ imageUrl, imageBase64, fileName, mimeType });
-      return wp.createPost({ title, content, status, excerpt, categories, tags, featured_media: media.id });
+      const media = await wp.uploadMedia({
+        imageUrl: args.image_url,
+        imageBase64: args.image_base64,
+        fileName: args.filename,
+        mimeType: args.mime_type,
+      });
+      const p = await wp.createPost({
+        title: args.title,
+        content: args.content,
+        status: args.status || 'draft',
+        excerpt: args.excerpt,
+        categories: args.categories,
+        tags: args.tags,
+        featured_media: media.id,
+      });
+      return { post_id: p.id, post_link: p.link, status: p.status, media_id: media.id, media_url: media.source_url };
     }
+
     default:
       throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32601 });
   }
 }
 
+// ─── MCP Endpoint ─────────────────────────────────────────────────────────────
+
 app.post('/', async (req, res) => {
-  console.log('=== MCP runtime POST / received ===');
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    console.error('Missing or invalid Authorization header');
-    return res.status(401).json({
-      jsonrpc: '2.0',
-      error: { code: -32600, message: 'Missing Authorization header' },
-    });
+  // Verify static Bearer token
+  const authHeader = req.headers['authorization'] || '';
+  const incoming = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!incoming || incoming !== MCP_TOKEN) {
+    return res.status(401).json({ error: 'unauthorized', error_description: 'Invalid or missing Bearer token' });
   }
-
-  const token = authHeader.slice(7);
-  const tokenInfo = accessTokens.get(token);
-  if (!tokenInfo) {
-    console.error('Invalid or expired access token:', token.slice(0, 8) + '...');
-    return res.status(401).json({
-      jsonrpc: '2.0',
-      error: { code: -32600, message: 'Invalid or expired access token' },
-    });
-  }
-
-  console.log('Token validated for client:', tokenInfo.client_id);
 
   const { method, id, params } = req.body;
 
-  // Notifications have no id — acknowledge without a body
-  if (id === undefined && method) {
-    console.log('Notification received (no response):', method);
+  // JSON-RPC notifications have no id — must not send a response body
+  if (id === undefined || id === null) {
+    console.log(`  Notification: ${method}`);
     return res.status(204).end();
   }
+
+  console.log(`  RPC: ${method} (id=${id})`);
 
   if (method === 'initialize') {
     return res.json({
       jsonrpc: '2.0',
       id,
       result: {
-        protocolVersion: params?.protocolVersion || '2024-11-05',
+        protocolVersion: '2025-03-26',
+        serverInfo: { name: 'WordPress MCP', version: '1.0.0' },
         capabilities: { tools: {} },
-        serverInfo: { name: 'WordPress MCP Server', version: '0.1.0' },
       },
     });
   }
 
   if (method === 'tools/list') {
-    return res.json({
-      jsonrpc: '2.0',
-      id,
-      result: { tools: MCP_TOOLS },
-    });
+    return res.json({ jsonrpc: '2.0', id, result: { tools: MCP_TOOLS } });
   }
 
   if (method === 'tools/call') {
     const toolName = params?.name;
     const toolArgs = params?.arguments || {};
-    console.log('Tool call:', toolName, JSON.stringify(toolArgs));
+    console.log(`  Tool: ${toolName}`, toolArgs);
     try {
-      const data = await callTool(toolName, toolArgs);
+      const result = await runTool(toolName, toolArgs);
       return res.json({
         jsonrpc: '2.0',
         id,
-        result: {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
-        },
+        result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] },
       });
     } catch (err) {
-      console.error('Tool call error:', err.message);
+      console.error(`  Tool error [${toolName}]:`, err.message);
       return res.json({
         jsonrpc: '2.0',
         id,
-        result: {
-          content: [{ type: 'text', text: `Error: ${err.message}` }],
-          isError: true,
-        },
+        result: { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true },
       });
     }
   }
@@ -345,416 +420,15 @@ app.post('/', async (req, res) => {
   });
 });
 
-app.get('/check-wp-auth', async (req, res) => {
-  try {
-    const user = await wp.getCurrentUser();
-    res.json({ ok: true, user });
-  } catch (error) {
-    res.status(401).json({ ok: false, error: error.message, details: error.response?.data || null });
-  }
+// ─── Health Check ─────────────────────────────────────────────────────────────
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', wordpress: WP_URL });
 });
 
-app.get('/posts', async (req, res) => {
-  try {
-    const posts = await wp.getPosts(req.query);
-    res.json(posts);
-  } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data || null });
-  }
-});
-
-app.get('/posts/:postId', async (req, res) => {
-  try {
-    const post = await wp.getPost(req.params.postId);
-    res.json(post);
-  } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data || null });
-  }
-});
-
-app.get('/manifest', (req, res) => {
-  res.json(manifest);
-});
-
-// Compatibility endpoints for connector registration probes
-function getBaseUrlFromRequest(req) {
-  const forwardedProto = req.headers['x-forwarded-proto'] || req.headers['x-forwarded-protocol'];
-  let scheme = forwardedProto ? forwardedProto.split(',')[0].trim() : null;
-
-  if (!scheme && req.headers['cf-visitor']) {
-    try {
-      const visitor = JSON.parse(req.headers['cf-visitor']);
-      scheme = visitor.scheme;
-    } catch (err) {
-      scheme = null;
-    }
-  }
-
-  if (!scheme) {
-    scheme = req.protocol;
-  }
-
-  return `${scheme}://${req.get('host')}`;
-}
-
-function buildRegistrationResponse(req, client_id, client_secret) {
-  const baseUrl = getBaseUrlFromRequest(req);
-  const redirectUris = Array.isArray(req.body.redirect_uris) ? [...req.body.redirect_uris] : [];
-  if (!redirectUris.length) {
-    redirectUris.push(`${baseUrl}/authorized`);
-  }
-
-  const resolvedClientId = CLAUDE_OAUTH_CLIENT_ID || client_id;
-  const resolvedClientSecret = CLAUDE_OAUTH_CLIENT_SECRET || client_secret;
-
-  return {
-    client_id: resolvedClientId,
-    client_secret: resolvedClientSecret,
-    client_id_issued_at: Math.floor(Date.now() / 1000),
-    client_secret_expires_at: 0,
-    token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
-    grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
-    response_types: req.body.response_types || ['code'],
-    redirect_uris: redirectUris,
-    client_name: req.body.client_name || 'claude',
-    application_type: req.body.application_type || 'web',
-    scope: req.body.scope || 'openid',
-    token_endpoint: `${baseUrl}/oauth/token`,
-    authorization_endpoint: `${baseUrl}/oauth/authorize`,
-    registration_client_uri: `${baseUrl}${req.path}`,
-    registration_access_token: crypto.randomBytes(24).toString('hex'),
-    issuer: baseUrl,
-    jwks_uri: `${baseUrl}/.well-known/jwks.json`,
-    introspection_endpoint: `${baseUrl}/oauth/introspect`,
-    revocation_endpoint: `${baseUrl}/oauth/revoke`,
-  };
-}
-
-app.post('/.well-known/mcp/register', (req, res) => {
-  console.log('=== MCP register probe received at /.well-known/mcp/register ===');
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-  try {
-    const fs = require('fs');
-    fs.appendFileSync('debug-register.log', `TIME: ${new Date().toISOString()}\nPATH: /.well-known/mcp/register\nHEADERS: ${JSON.stringify(req.headers)}\nBODY: ${JSON.stringify(req.body)}\n----\n`);
-  } catch (e) {
-    console.error('Failed to write debug log', e.message);
-  }
-  try {
-    const client_id = CLAUDE_OAUTH_CLIENT_ID || `claude-${crypto.randomBytes(16).toString('hex')}`;
-    const client_secret = CLAUDE_OAUTH_CLIENT_SECRET || crypto.randomBytes(16).toString('hex');
-    const resp = buildRegistrationResponse(req, client_id, client_secret);
-    try {
-      const fs = require('fs');
-      fs.appendFileSync('debug-register.log', `RESPONSE: ${JSON.stringify(resp)}\n`);
-    } catch (e) {}
-    res.status(201).json(resp);
-    return;
-  } catch (e) {
-    console.error('Registration response error', e.message);
-    res.status(500).json({ ok: false, error: 'registration response failed' });
-    return;
-  }
-});
-
-app.post('/register', (req, res) => {
-  console.log('=== MCP register probe received at /register ===');
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-  try {
-    const fs = require('fs');
-    fs.appendFileSync('debug-register.log', `TIME: ${new Date().toISOString()}\nPATH: /register\nHEADERS: ${JSON.stringify(req.headers)}\nBODY: ${JSON.stringify(req.body)}\n----\n`);
-  } catch (e) {
-    console.error('Failed to write debug log', e.message);
-  }
-  try {
-    const client_id = CLAUDE_OAUTH_CLIENT_ID || `claude-${crypto.randomBytes(16).toString('hex')}`;
-    const client_secret = CLAUDE_OAUTH_CLIENT_SECRET || crypto.randomBytes(16).toString('hex');
-    const resp = buildRegistrationResponse(req, client_id, client_secret);
-    try {
-      const fs = require('fs');
-      fs.appendFileSync('debug-register.log', `RESPONSE: ${JSON.stringify(resp)}\n`);
-    } catch (e) {}
-    res.status(201).json(resp);
-    return;
-  } catch (e) {
-    console.error('Registration response error', e.message);
-    res.status(500).json({ ok: false, error: 'registration response failed' });
-    return;
-  }
-});
-
-const handleTokenRequest = (req, res) => {
-  console.log('=== OAuth token request received ===');
-  console.log('Path:', req.path);
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-
-  const {
-    grant_type,
-    code,
-    redirect_uri,
-    client_id,
-    client_secret,
-    code_verifier,
-    refresh_token,
-  } = req.body;
-
-  if (grant_type === 'authorization_code') {
-    const { clientId, clientSecret } = getClientCredentials(req);
-
-    if (CLAUDE_OAUTH_CLIENT_ID && clientId !== CLAUDE_OAUTH_CLIENT_ID) {
-      return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_id' });
-    }
-
-    if (CLAUDE_OAUTH_CLIENT_SECRET && clientSecret !== CLAUDE_OAUTH_CLIENT_SECRET) {
-      return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_secret' });
-    }
-
-    const auth = authCodes.get(code);
-    if (!auth) {
-      return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
-    }
-
-    if (redirect_uri && redirect_uri !== auth.redirect_uri) {
-      return res.status(400).json({ error: 'invalid_request', error_description: 'redirect_uri does not match' });
-    }
-
-    if (auth.code_challenge) {
-      if (!code_verifier) {
-        return res.status(400).json({ error: 'invalid_request', error_description: 'code_verifier is required' });
-      }
-      const hashed = crypto.createHash('sha256').update(code_verifier).digest();
-      const actualChallenge = normalizeBase64Url(hashed);
-      if (actualChallenge !== auth.code_challenge) {
-        return res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
-      }
-    }
-
-    authCodes.delete(code);
-    const accessToken = generateCode();
-    const newRefreshToken = generateCode();
-    accessTokens.set(accessToken, {
-      client_id: auth.client_id,
-      scope: auth.scope || 'openid',
-      createdAt: Date.now(),
-    });
-
-    const tokenResponse = {
-      access_token: accessToken,
-      token_type: 'Bearer',
-      expires_in: 3600,
-      refresh_token: newRefreshToken,
-      scope: auth.scope || 'openid',
-    };
-    console.log('=== OAuth token response ===');
-    console.log(JSON.stringify(tokenResponse, null, 2));
-    return res.json(tokenResponse);
-  }
-
-  if (grant_type === 'refresh_token') {
-    const newAccessToken = generateCode();
-    accessTokens.set(newAccessToken, {
-      client_id: client_id || 'claude',
-      scope: req.body.scope || 'openid',
-      createdAt: Date.now(),
-    });
-    const tokenResponse = {
-      access_token: newAccessToken,
-      token_type: 'Bearer',
-      expires_in: 3600,
-      refresh_token: refresh_token || generateCode(),
-      scope: req.body.scope || 'openid',
-    };
-    console.log('=== OAuth refresh token response ===');
-    console.log(JSON.stringify(tokenResponse, null, 2));
-    return res.json(tokenResponse);
-  }
-
-  return res.status(400).json({ error: 'unsupported_grant_type' });
-};
-
-app.post(['/oauth/token', '/token'], handleTokenRequest);
-
-app.post(['/oauth/introspect', '/introspect'], (req, res) => {
-  console.log('=== OAuth introspection request received ===');
-  console.log('Path:', req.path);
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-
-  const token = req.body.token;
-  const info = accessTokens.get(token);
-  res.json({
-    active: Boolean(info),
-    scope: info?.scope || 'openid',
-    client_id: info?.client_id || req.body.client_id || 'claude',
-  });
-});
-
-app.post(['/oauth/revoke', '/revoke'], (req, res) => {
-  console.log('=== OAuth revoke request received ===');
-  console.log('Path:', req.path);
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-
-  res.status(200).json({
-    revoked: true,
-  });
-});
-
-function buildOAuthMetadata(req) {
-  const baseUrl = getBaseUrlFromRequest(req);
-  return {
-    issuer: baseUrl,
-    authorization_endpoint: `${baseUrl}/oauth/authorize`,
-    token_endpoint: `${baseUrl}/oauth/token`,
-    introspection_endpoint: `${baseUrl}/oauth/introspect`,
-    revocation_endpoint: `${baseUrl}/oauth/revoke`,
-    jwks_uri: `${baseUrl}/.well-known/jwks.json`,
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
-    token_endpoint_auth_methods_supported: ['client_secret_post'],
-    scopes_supported: ['openid'],
-    code_challenge_methods_supported: ['S256'],
-  };
-}
-
-app.get(['/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server'], (req, res) => {
-  console.log('=== OAuth metadata probe received ===');
-  console.log('Path:', req.path);
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  res.json(buildOAuthMetadata(req));
-});
-
-app.get('/.well-known/jwks.json', (req, res) => {
-  res.json({ keys: [] });
-});
-
-app.post('/create-post', async (req, res) => {
-  try {
-    const post = await wp.createPost(req.body);
-    res.status(201).json(post);
-  } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data || null });
-  }
-});
-
-app.post('/update-post', async (req, res) => {
-  try {
-    const { postId, ...updates } = req.body;
-    if (!postId) {
-      return res.status(400).json({ error: 'postId is required' });
-    }
-    const updated = await wp.updatePost(postId, updates);
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data || null });
-  }
-});
-
-app.post('/upload-image', async (req, res) => {
-  try {
-    const media = await wp.uploadMedia(req.body);
-    res.status(201).json(media);
-  } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data || null });
-  }
-});
-
-app.post('/set-featured-image', async (req, res) => {
-  try {
-    const { postId, mediaId } = req.body;
-    if (!postId || !mediaId) {
-      return res.status(400).json({ error: 'postId and mediaId are required' });
-    }
-    const updated = await wp.setFeaturedImage(postId, mediaId);
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data || null });
-  }
-});
-
-app.post('/create-post-with-image', async (req, res) => {
-  try {
-    const { imageUrl, imageBase64, fileName, mimeType, title, content, status = 'draft', excerpt, categories, tags } = req.body;
-
-    if (!title || !content) {
-      return res.status(400).json({ error: 'title and content are required' });
-    }
-
-    const media = await wp.uploadMedia({ imageUrl, imageBase64, fileName, mimeType });
-    const post = await wp.createPost({
-      title,
-      content,
-      status,
-      excerpt,
-      categories,
-      tags,
-      featured_media: media.id,
-    });
-
-    res.status(201).json({ post, media });
-  } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data || null });
-  }
-});
-
-// OAuth compatibility routes to avoid 404s during connector flows
-app.get('/authorized', (req, res) => {
-  console.log('=== OAuth authorized callback received ===');
-  console.log('Path:', req.path);
-  console.log('Query:', req.query);
-
-  const info = {
-    path: req.path,
-    query: req.query,
-    message: 'Authorization callback received. If this was part of an OAuth flow, Claude should continue.'
-  };
-  res.setHeader('Content-Type', 'text/html');
-  res.send(`<html><body><h2>WordPress MCP Server</h2><pre>${JSON.stringify(info,null,2)}</pre></body></html>`);
-});
-
-app.get(['/authorize', '/oauth/authorize'], (req, res) => {
-  console.log('=== OAuth authorize request received ===');
-  console.log('Path:', req.path);
-  console.log('Query:', req.query);
-
-  const {
-    response_type,
-    client_id,
-    redirect_uri,
-    code_challenge,
-    code_challenge_method,
-    state,
-    scope,
-  } = req.query;
-
-  if (response_type !== 'code' || !client_id || !redirect_uri) {
-    return res.status(400).send('Missing required OAuth authorize parameters');
-  }
-
-  if (CLAUDE_OAUTH_CLIENT_ID && client_id !== CLAUDE_OAUTH_CLIENT_ID) {
-    return res.status(400).send('Invalid client_id');
-  }
-
-  if (CLAUDE_OAUTH_REDIRECT_URI && redirect_uri !== CLAUDE_OAUTH_REDIRECT_URI) {
-    return res.status(400).send('Invalid redirect_uri');
-  }
-
-  const authCode = generateCode();
-  authCodes.set(authCode, {
-    client_id,
-    redirect_uri,
-    code_challenge,
-    code_challenge_method,
-    scope,
-    createdAt: Date.now(),
-  });
-
-  const separator = redirect_uri.includes('?') ? '&' : '?';
-  const destination = `${redirect_uri}${separator}code=${encodeURIComponent(authCode)}${state ? `&state=${encodeURIComponent(state)}` : ''}`;
-
-  console.log('Redirecting to:', destination);
-  res.redirect(302, destination);
-});
+// ─── Start ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`WordPress MCP Server listening on http://0.0.0.0:${PORT}`);
+  console.log(`WordPress MCP listening on port ${PORT}`);
+  console.log(`WordPress: ${WP_URL}`);
 });

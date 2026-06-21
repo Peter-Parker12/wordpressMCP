@@ -129,6 +129,11 @@
       "description": "JWKS endpoint for OAuth compatibility."
     },
     {
+      "path": "/authorize",
+      "method": "GET",
+      "description": "OAuth authorization endpoint (compatibility, raw path used by Claude)."
+    },
+    {
       "path": "/oauth/authorize",
       "method": "GET",
       "description": "OAuth authorization endpoint (compatibility)."

@@ -188,8 +188,9 @@ app.post('/register', (req, res) => {
   }
 });
 
-app.post('/oauth/token', (req, res) => {
+const handleTokenRequest = (req, res) => {
   console.log('=== OAuth token request received ===');
+  console.log('Path:', req.path);
   console.log('Body:', JSON.stringify(req.body, null, 2));
 
   const {
@@ -258,10 +259,13 @@ app.post('/oauth/token', (req, res) => {
   }
 
   return res.status(400).json({ error: 'unsupported_grant_type' });
-});
+};
 
-app.post('/oauth/introspect', (req, res) => {
+app.post(['/oauth/token', '/token'], handleTokenRequest);
+
+app.post(['/oauth/introspect', '/introspect'], (req, res) => {
   console.log('=== OAuth introspection request received ===');
+  console.log('Path:', req.path);
   console.log('Body:', JSON.stringify(req.body, null, 2));
 
   const token = req.body.token;
@@ -273,8 +277,9 @@ app.post('/oauth/introspect', (req, res) => {
   });
 });
 
-app.post('/oauth/revoke', (req, res) => {
+app.post(['/oauth/revoke', '/revoke'], (req, res) => {
   console.log('=== OAuth revoke request received ===');
+  console.log('Path:', req.path);
   console.log('Body:', JSON.stringify(req.body, null, 2));
 
   res.status(200).json({

@@ -10,7 +10,6 @@ const PORT = process.env.PORT || 9809;
 const WP_URL = process.env.WP_URL;
 const WP_USERNAME = process.env.WP_USERNAME;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
-const MCP_TOKEN = process.env.MCP_TOKEN;
 const CLAUDE_CLIENT_ID = process.env.CLAUDE_CLIENT_ID;
 const CLAUDE_CLIENT_SECRET = process.env.CLAUDE_CLIENT_SECRET;
 
@@ -18,12 +17,8 @@ if (!WP_URL || !WP_USERNAME || !WP_APP_PASSWORD) {
   console.error('ERROR: Missing required env vars. Set WP_URL, WP_USERNAME, and WP_APP_PASSWORD in .env');
   process.exit(1);
 }
-if (!MCP_TOKEN) {
-  console.error('ERROR: MCP_TOKEN not set. Generate one with: openssl rand -hex 32');
-  process.exit(1);
-}
 if (!CLAUDE_CLIENT_ID || !CLAUDE_CLIENT_SECRET) {
-  console.error('ERROR: CLAUDE_CLIENT_ID and CLAUDE_CLIENT_SECRET not set. Choose any values and enter the same in Claude connector settings.');
+  console.error('ERROR: CLAUDE_CLIENT_ID and CLAUDE_CLIENT_SECRET not set. Enter the same values in Claude connector settings.');
   process.exit(1);
 }
 
@@ -359,11 +354,18 @@ async function runTool(name, args) {
 // ─── MCP Endpoint ─────────────────────────────────────────────────────────────
 
 app.post('/', async (req, res) => {
-  // Verify static Bearer token
+  // Verify OAuth-issued Bearer token
   const authHeader = req.headers['authorization'] || '';
-  const incoming = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  if (!incoming || incoming !== MCP_TOKEN) {
-    return res.status(401).json({ error: 'unauthorized', error_description: 'Invalid or missing Bearer token' });
+  if (!authHeader.startsWith('Bearer ')) {
+    const base = getBaseUrl(req);
+    res.set('WWW-Authenticate', `Bearer realm="WordPress MCP", resource_metadata="${base}/.well-known/oauth-protected-resource"`);
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  const tokenStr = authHeader.slice(7);
+  if (!tokens.getToken(tokenStr)) {
+    const base = getBaseUrl(req);
+    res.set('WWW-Authenticate', `Bearer realm="WordPress MCP", resource_metadata="${base}/.well-known/oauth-protected-resource"`);
+    return res.status(401).json({ error: 'invalid_token' });
   }
 
   const { method, id, params } = req.body;

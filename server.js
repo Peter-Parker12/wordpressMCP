@@ -274,6 +274,10 @@ app.post('/create-post-with-image', async (req, res) => {
 
 // OAuth compatibility routes to avoid 404s during connector flows
 app.get('/authorized', (req, res) => {
+  console.log('=== OAuth authorized callback received ===');
+  console.log('Path:', req.path);
+  console.log('Query:', req.query);
+
   const info = {
     path: req.path,
     query: req.query,
@@ -284,6 +288,10 @@ app.get('/authorized', (req, res) => {
 });
 
 app.get(['/authorize', '/oauth/authorize'], (req, res) => {
+  console.log('=== OAuth authorize request received ===');
+  console.log('Path:', req.path);
+  console.log('Query:', req.query);
+
   const redirectUrl = `/authorized${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`;
   res.redirect(302, redirectUrl);
 });

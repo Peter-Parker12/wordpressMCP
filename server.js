@@ -283,7 +283,7 @@ app.get('/authorized', (req, res) => {
   res.send(`<html><body><h2>WordPress MCP Server</h2><pre>${JSON.stringify(info,null,2)}</pre></body></html>`);
 });
 
-app.get('/oauth/authorize', (req, res) => {
+app.get(['/authorize', '/oauth/authorize'], (req, res) => {
   const redirectUrl = `/authorized${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`;
   res.redirect(302, redirectUrl);
 });

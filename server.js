@@ -24,12 +24,6 @@ const wp = createWordPressClient({
   username: WP_USERNAME,
   password: WP_APP_PASSWORD,
 });
-    issuer: baseUrl,
-    jwks_uri: `${baseUrl}/.well-known/jwks.json`,
-    introspection_endpoint: `${baseUrl}/oauth/introspect`,
-    revocation_endpoint: `${baseUrl}/oauth/revoke`,
-  };
-}
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', site: WP_URL });

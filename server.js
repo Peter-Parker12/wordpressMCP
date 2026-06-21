@@ -115,7 +115,140 @@ app.get('/.well-known/mcp', (req, res) => {
   res.json(manifest);
 });
 
-app.post('/', (req, res) => {
+const MCP_TOOLS = [
+  {
+    name: 'create_post',
+    description: 'Create a new WordPress post.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post content (HTML)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)' },
+        excerpt: { type: 'string', description: 'Post excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Array of category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Array of tag IDs' },
+        featured_media: { type: 'integer', description: 'Media ID for featured image' },
+      },
+      required: ['title', 'content'],
+    },
+  },
+  {
+    name: 'update_post',
+    description: 'Update an existing WordPress post.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        postId: { type: 'integer', description: 'ID of the post to update' },
+        title: { type: 'string', description: 'New post title' },
+        content: { type: 'string', description: 'New post content (HTML)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status' },
+        excerpt: { type: 'string', description: 'Post excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Array of category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Array of tag IDs' },
+        featured_media: { type: 'integer', description: 'Media ID for featured image' },
+      },
+      required: ['postId'],
+    },
+  },
+  {
+    name: 'get_posts',
+    description: 'List WordPress posts with optional filters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: { type: 'integer', description: 'Page number' },
+        per_page: { type: 'integer', description: 'Posts per page (max 100)' },
+        status: { type: 'string', description: 'Filter by post status' },
+        search: { type: 'string', description: 'Search term' },
+      },
+    },
+  },
+  {
+    name: 'get_post',
+    description: 'Fetch a single WordPress post by ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        postId: { type: 'integer', description: 'Post ID' },
+      },
+      required: ['postId'],
+    },
+  },
+  {
+    name: 'upload_media',
+    description: 'Upload an image to the WordPress media library.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        imageUrl: { type: 'string', description: 'URL of the image to upload' },
+        imageBase64: { type: 'string', description: 'Base64-encoded image data' },
+        fileName: { type: 'string', description: 'File name for the uploaded image' },
+        mimeType: { type: 'string', description: 'MIME type (e.g. image/jpeg)' },
+      },
+    },
+  },
+  {
+    name: 'set_featured_image',
+    description: 'Set the featured image of a WordPress post.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        postId: { type: 'integer', description: 'Post ID' },
+        mediaId: { type: 'integer', description: 'Media ID to use as featured image' },
+      },
+      required: ['postId', 'mediaId'],
+    },
+  },
+  {
+    name: 'create_post_with_image',
+    description: 'Create a WordPress post and upload an image to use as its featured image.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post content (HTML)' },
+        imageUrl: { type: 'string', description: 'URL of the image to upload' },
+        imageBase64: { type: 'string', description: 'Base64-encoded image data' },
+        fileName: { type: 'string', description: 'File name for the image' },
+        mimeType: { type: 'string', description: 'MIME type (e.g. image/jpeg)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)' },
+        excerpt: { type: 'string', description: 'Post excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Array of category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Array of tag IDs' },
+      },
+      required: ['title', 'content'],
+    },
+  },
+];
+
+async function callTool(name, args) {
+  switch (name) {
+    case 'create_post':
+      return wp.createPost(args);
+    case 'update_post': {
+      const { postId, ...updates } = args;
+      return wp.updatePost(postId, updates);
+    }
+    case 'get_posts':
+      return wp.getPosts(args);
+    case 'get_post':
+      return wp.getPost(args.postId);
+    case 'upload_media':
+      return wp.uploadMedia(args);
+    case 'set_featured_image':
+      return wp.setFeaturedImage(args.postId, args.mediaId);
+    case 'create_post_with_image': {
+      const { imageUrl, imageBase64, fileName, mimeType, title, content, status, excerpt, categories, tags } = args;
+      const media = await wp.uploadMedia({ imageUrl, imageBase64, fileName, mimeType });
+      return wp.createPost({ title, content, status, excerpt, categories, tags, featured_media: media.id });
+    }
+    default:
+      throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32601 });
+  }
+}
+
+app.post('/', async (req, res) => {
   console.log('=== MCP runtime POST / received ===');
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
   console.log('Body:', JSON.stringify(req.body, null, 2));
@@ -125,10 +258,7 @@ app.post('/', (req, res) => {
     console.error('Missing or invalid Authorization header');
     return res.status(401).json({
       jsonrpc: '2.0',
-      error: {
-        code: -32600,
-        message: 'Missing Authorization header',
-      },
+      error: { code: -32600, message: 'Missing Authorization header' },
     });
   }
 
@@ -138,39 +268,70 @@ app.post('/', (req, res) => {
     console.error('Invalid or expired access token:', token.slice(0, 8) + '...');
     return res.status(401).json({
       jsonrpc: '2.0',
-      error: {
-        code: -32600,
-        message: 'Invalid or expired access token',
-      },
+      error: { code: -32600, message: 'Invalid or expired access token' },
     });
   }
 
   console.log('Token validated for client:', tokenInfo.client_id);
 
   const { method, id, params } = req.body;
+
+  // Notifications have no id — acknowledge without a body
+  if (id === undefined && method) {
+    console.log('Notification received (no response):', method);
+    return res.status(204).end();
+  }
+
   if (method === 'initialize') {
-    const result = {
-      protocolVersion: params?.protocolVersion || '2025-11-25',
-      serverName: 'WordPress MCP Server',
-      serverVersion: '0.1.0',
-      capabilities: {
-        extensions: {
-          'io.modelcontextprotocol/ui': {
-            mimeTypes: ['text/html;profile=mcp-app'],
-          },
-        },
+    return res.json({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        protocolVersion: params?.protocolVersion || '2024-11-05',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'WordPress MCP Server', version: '0.1.0' },
       },
-    };
-    return res.json({ jsonrpc: '2.0', id, result });
+    });
+  }
+
+  if (method === 'tools/list') {
+    return res.json({
+      jsonrpc: '2.0',
+      id,
+      result: { tools: MCP_TOOLS },
+    });
+  }
+
+  if (method === 'tools/call') {
+    const toolName = params?.name;
+    const toolArgs = params?.arguments || {};
+    console.log('Tool call:', toolName, JSON.stringify(toolArgs));
+    try {
+      const data = await callTool(toolName, toolArgs);
+      return res.json({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+        },
+      });
+    } catch (err) {
+      console.error('Tool call error:', err.message);
+      return res.json({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          content: [{ type: 'text', text: `Error: ${err.message}` }],
+          isError: true,
+        },
+      });
+    }
   }
 
   return res.json({
     jsonrpc: '2.0',
     id,
-    error: {
-      code: -32601,
-      message: `Method not found: ${method}`,
-    },
+    error: { code: -32601, message: `Method not found: ${method}` },
   });
 });
 

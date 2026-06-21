@@ -174,6 +174,9 @@ app.post('/register', (req, res) => {
 });
 
 app.post('/oauth/token', (req, res) => {
+  console.log('=== OAuth token request received ===');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+
   const accessToken = crypto.randomBytes(24).toString('hex');
   const refreshToken = crypto.randomBytes(24).toString('hex');
   res.json({
@@ -186,6 +189,9 @@ app.post('/oauth/token', (req, res) => {
 });
 
 app.post('/oauth/introspect', (req, res) => {
+  console.log('=== OAuth introspection request received ===');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+
   res.json({
     active: true,
     scope: req.body.scope || 'openid',
@@ -194,6 +200,9 @@ app.post('/oauth/introspect', (req, res) => {
 });
 
 app.post('/oauth/revoke', (req, res) => {
+  console.log('=== OAuth revoke request received ===');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+
   res.status(200).json({
     revoked: true,
   });

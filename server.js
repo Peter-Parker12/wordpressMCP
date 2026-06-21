@@ -24,25 +24,6 @@ const wp = createWordPressClient({
   username: WP_USERNAME,
   password: WP_APP_PASSWORD,
 });
-
-function buildRegistrationResponse(req, client_id, client_secret) {
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
-  return {
-    client_id,
-    client_secret,
-    client_id_issued_at: Math.floor(Date.now() / 1000),
-    client_secret_expires_at: 0,
-    token_endpoint_auth_method: req.body.token_endpoint_auth_method || 'client_secret_post',
-    grant_types: req.body.grant_types || ['authorization_code', 'refresh_token'],
-    response_types: req.body.response_types || ['code'],
-    redirect_uris: req.body.redirect_uris || [],
-    client_name: req.body.client_name || 'claude',
-    application_type: req.body.application_type || 'web',
-    scope: req.body.scope || 'openid',
-    token_endpoint: `${baseUrl}/oauth/token`,
-    authorization_endpoint: `${baseUrl}/oauth/authorize`,
-    registration_client_uri: `${baseUrl}${req.path}`,
-    registration_access_token: crypto.randomBytes(24).toString('hex'),
     issuer: baseUrl,
     jwks_uri: `${baseUrl}/.well-known/jwks.json`,
     introspection_endpoint: `${baseUrl}/oauth/introspect`,
@@ -94,8 +75,28 @@ app.get('/manifest', (req, res) => {
 });
 
 // Compatibility endpoints for connector registration probes
+function getBaseUrlFromRequest(req) {
+  const forwardedProto = req.headers['x-forwarded-proto'] || req.headers['x-forwarded-protocol'];
+  let scheme = forwardedProto ? forwardedProto.split(',')[0].trim() : null;
+
+  if (!scheme && req.headers['cf-visitor']) {
+    try {
+      const visitor = JSON.parse(req.headers['cf-visitor']);
+      scheme = visitor.scheme;
+    } catch (err) {
+      scheme = null;
+    }
+  }
+
+  if (!scheme) {
+    scheme = req.protocol;
+  }
+
+  return `${scheme}://${req.get('host')}`;
+}
+
 function buildRegistrationResponse(req, client_id, client_secret) {
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = getBaseUrlFromRequest(req);
   const redirectUris = Array.isArray(req.body.redirect_uris) ? [...req.body.redirect_uris] : [];
   if (!redirectUris.length) {
     redirectUris.push(`${baseUrl}/authorized`);

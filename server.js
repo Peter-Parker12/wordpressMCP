@@ -55,6 +55,16 @@ function sendEvent(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+setInterval(() => {
+  for (const client of sseClients) {
+    try {
+      sendEvent(client, { type: 'ping' });
+    } catch (err) {
+      sseClients.delete(client);
+    }
+  }
+}, 15000);
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', site: WP_URL });
 });
@@ -92,8 +102,15 @@ app.post('/', (req, res) => {
   if (method === 'initialize') {
     const result = {
       protocolVersion: params?.protocolVersion || '2025-11-25',
-      capabilities: {},
       serverName: 'WordPress MCP Server',
+      serverVersion: '0.1.0',
+      capabilities: {
+        extensions: {
+          'io.modelcontextprotocol/ui': {
+            mimeTypes: ['text/html;profile=mcp-app'],
+          },
+        },
+      },
     };
     return res.json({ jsonrpc: '2.0', id, result });
   }

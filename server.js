@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const { createWordPressClient } = require('./src/wordpress');
 const tokens = require('./src/tokens');
 const { generateImage } = require('./src/imageGen');
+const { generateImagePro, sessionExists } = require('./src/geminiImageGen');
 const { extractImagePrompts, insertImagesIntoContent } = require('./src/promptExtractor');
 
 dotenv.config();
@@ -280,8 +281,21 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'generate_image_pro',
+    description: 'Generate a HIGH QUALITY image using Google ImageFX (Imagen 3) via browser automation with a logged-in Google Pro account. Use this instead of generate_image when best quality is needed. Requires a saved Gemini session on the server.',
+    inputSchema: {
+      type: 'object',
+      required: ['prompt'],
+      properties: {
+        prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '16:9' },
+        filename: { type: 'string', description: 'Filename to use when saving to WordPress (default: pro-generated.jpg)' },
+      },
+    },
+  },
+  {
     name: 'generate_image',
-    description: 'Generate an image using Google Imagen 3 (via Gemini API) from a text prompt and upload it to the WordPress media library.',
+    description: 'Generate an image using Pollinations.ai (Flux model, free) from a text prompt and upload it to the WordPress media library.',
     inputSchema: {
       type: 'object',
       required: ['prompt'],
@@ -397,6 +411,23 @@ async function runTool(name, args) {
         featured_media: media.id,
       });
       return { post_id: p.id, post_link: p.link, status: p.status, media_id: media.id, media_url: media.source_url };
+    }
+
+    case 'generate_image_pro': {
+      if (!sessionExists()) {
+        throw new Error('No Gemini session found on server. Run: node scripts/save-session.js first.');
+      }
+      const [generated] = await generateImagePro({
+        prompt: args.prompt,
+        aspectRatio: args.aspect_ratio || '16:9',
+      });
+      const filename = args.filename || 'pro-generated.jpg';
+      const media = await wp.uploadMedia({
+        imageBase64: generated.base64,
+        fileName: filename,
+        mimeType: generated.mimeType,
+      });
+      return { media_id: media.id, media_url: media.source_url, filename: media.slug, source: 'google-imagefx' };
     }
 
     case 'generate_image': {

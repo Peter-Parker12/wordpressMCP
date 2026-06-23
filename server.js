@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const dotenv = require('dotenv');
 const { createWordPressClient } = require('./src/wordpress');
 const tokens = require('./src/tokens');
+const { generateImage } = require('./src/imageGen');
+const { extractImagePrompts, insertImagesIntoContent } = require('./src/promptExtractor');
 
 dotenv.config();
 
@@ -16,6 +18,9 @@ const CLAUDE_CLIENT_SECRET = process.env.CLAUDE_CLIENT_SECRET;
 if (!WP_URL || !WP_USERNAME || !WP_APP_PASSWORD) {
   console.error('ERROR: Missing required env vars. Set WP_URL, WP_USERNAME, and WP_APP_PASSWORD in .env');
   process.exit(1);
+}
+if (!process.env.GEMINI_API_KEY) {
+  console.warn('WARNING: GEMINI_API_KEY not set — generate_image tools will not work');
 }
 if (!CLAUDE_CLIENT_ID || !CLAUDE_CLIENT_SECRET) {
   console.error('ERROR: CLAUDE_CLIENT_ID and CLAUDE_CLIENT_SECRET not set. Enter the same values in Claude connector settings.');
@@ -274,6 +279,54 @@ const MCP_TOOLS = [
       },
     },
   },
+  {
+    name: 'generate_image',
+    description: 'Generate an image using Google Imagen 3 (via Gemini API) from a text prompt and upload it to the WordPress media library.',
+    inputSchema: {
+      type: 'object',
+      required: ['prompt'],
+      properties: {
+        prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '16:9' },
+        filename: { type: 'string', description: 'Filename to use when saving to WordPress (default: generated-image.png)' },
+      },
+    },
+  },
+  {
+    name: 'generate_image_for_post',
+    description: 'Generate an image with Google Imagen 3, upload it to WordPress media, and create a new post with it as the featured image — all in one step.',
+    inputSchema: {
+      type: 'object',
+      required: ['prompt', 'title', 'content'],
+      properties: {
+        prompt: { type: 'string', description: 'Text prompt describing the featured image to generate' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '16:9' },
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post body content (HTML supported)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+      },
+    },
+  },
+  {
+    name: 'create_post_with_ai_images',
+    description: 'Automatically analyze post content, generate 3 matching section images using AI (one per H2 section), embed them into the content, and publish the post. The first image becomes the featured image.',
+    inputSchema: {
+      type: 'object',
+      required: ['title', 'content'],
+      properties: {
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post body HTML with H2 section headings. Images will be generated and inserted after each H2.' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio for all generated images (default: 16:9)', default: '16:9' },
+      },
+    },
+  },
 ];
 
 // ─── Tool Runner ──────────────────────────────────────────────────────────────
@@ -344,6 +397,86 @@ async function runTool(name, args) {
         featured_media: media.id,
       });
       return { post_id: p.id, post_link: p.link, status: p.status, media_id: media.id, media_url: media.source_url };
+    }
+
+    case 'generate_image': {
+      const [generated] = await generateImage({
+        prompt: args.prompt,
+        aspectRatio: args.aspect_ratio || '16:9',
+      });
+      const filename = args.filename || 'generated-image.png';
+      const media = await wp.uploadMedia({
+        imageBase64: generated.base64,
+        fileName: filename,
+        mimeType: generated.mimeType,
+      });
+      return { media_id: media.id, media_url: media.source_url, filename: media.slug };
+    }
+
+    case 'generate_image_for_post': {
+      const [generated] = await generateImage({
+        prompt: args.prompt,
+        aspectRatio: args.aspect_ratio || '16:9',
+      });
+      const media = await wp.uploadMedia({
+        imageBase64: generated.base64,
+        fileName: 'generated-image.png',
+        mimeType: generated.mimeType,
+      });
+      const p = await wp.createPost({
+        title: args.title,
+        content: args.content,
+        status: args.status || 'draft',
+        excerpt: args.excerpt,
+        categories: args.categories,
+        tags: args.tags,
+        featured_media: media.id,
+      });
+      return { post_id: p.id, post_link: p.link, status: p.status, media_id: media.id, media_url: media.source_url };
+    }
+
+    case 'create_post_with_ai_images': {
+      // 1. Extract 3 section-matched prompts from content
+      const prompts = extractImagePrompts(args.content, args.title);
+      console.log(`  Extracted ${prompts.length} image prompts from content`);
+
+      // 2. Generate & upload all 3 images sequentially (Pollinations rate limit)
+      const aspectRatio = args.aspect_ratio || '16:9';
+      const uploadedImages = [];
+      for (let i = 0; i < prompts.length; i++) {
+        const prompt = prompts[i];
+        console.log(`  Generating image ${i + 1}/${prompts.length}: ${prompt.slice(0, 80)}...`);
+        const [img] = await generateImage({ prompt, aspectRatio });
+        const media = await wp.uploadMedia({
+          imageBase64: img.base64,
+          fileName: `section-image-${i + 1}.jpg`,
+          mimeType: img.mimeType,
+        });
+        uploadedImages.push({ url: media.source_url, mediaId: media.id });
+      }
+
+      // 3. Embed images into content after each H2 section
+      const enrichedContent = insertImagesIntoContent(args.content, uploadedImages);
+
+      // 4. Create post with first image as featured media
+      const p = await wp.createPost({
+        title: args.title,
+        content: enrichedContent,
+        status: args.status || 'draft',
+        excerpt: args.excerpt,
+        categories: args.categories,
+        tags: args.tags,
+        featured_media: uploadedImages[0].mediaId,
+      });
+
+      return {
+        post_id: p.id,
+        post_link: p.link,
+        status: p.status,
+        images_generated: uploadedImages.length,
+        images: uploadedImages,
+        prompts_used: prompts,
+      };
     }
 
     default:

@@ -4,7 +4,6 @@ const dotenv = require('dotenv');
 const { createWordPressClient } = require('./src/wordpress');
 const tokens = require('./src/tokens');
 const { generateImage } = require('./src/imageGen');
-const { generateImagePro, sessionExists } = require('./src/geminiImageGen');
 const { extractImagePrompts, insertImagesIntoContent } = require('./src/promptExtractor');
 
 dotenv.config();
@@ -281,19 +280,6 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: 'generate_image_pro',
-    description: 'Generate a HIGH QUALITY image using Google ImageFX (Imagen 3) via browser automation with your logged-in Google Pro account — no API key needed. Use this for best quality. Requires cookies uploaded via import-cookies.js.',
-    inputSchema: {
-      type: 'object',
-      required: ['prompt'],
-      properties: {
-        prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
-        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '16:9' },
-        filename: { type: 'string', description: 'Filename for WordPress media (default: pro-generated.jpg)' },
-      },
-    },
-  },
-  {
     name: 'generate_image',
     description: 'Generate an image using Pollinations.ai (Flux model, free, no login needed) from a text prompt and upload it to the WordPress media library.',
     inputSchema: {
@@ -411,22 +397,6 @@ async function runTool(name, args) {
         featured_media: media.id,
       });
       return { post_id: p.id, post_link: p.link, status: p.status, media_id: media.id, media_url: media.source_url };
-    }
-
-    case 'generate_image_pro': {
-      if (!sessionExists()) {
-        throw new Error('No Gemini session found. Export cookies from Chrome using Cookie-Editor extension, then run: node scripts/import-cookies.js cookies.json and upload data/gemini-session.json to the VPS.');
-      }
-      const [generatedPro] = await generateImagePro({
-        prompt: args.prompt,
-        aspectRatio: args.aspect_ratio || '16:9',
-      });
-      const mediaPro = await wp.uploadMedia({
-        imageBase64: generatedPro.base64,
-        fileName: args.filename || 'pro-generated.jpg',
-        mimeType: generatedPro.mimeType,
-      });
-      return { media_id: mediaPro.id, media_url: mediaPro.source_url, filename: mediaPro.slug, source: 'google-imagefx' };
     }
 
     case 'generate_image': {

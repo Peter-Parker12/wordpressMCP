@@ -10,11 +10,11 @@ const axios = require('axios');
  */
 async function generateImage({ prompt, aspectRatio = '1:1' }) {
   const dimensions = {
-    '1:1':  { width: 1024, height: 1024 },
-    '16:9': { width: 1280, height: 720 },
-    '9:16': { width: 720,  height: 1280 },
-    '4:3':  { width: 1024, height: 768 },
-    '3:4':  { width: 768,  height: 1024 },
+    '1:1':  { width: 2048, height: 2048 },
+    '16:9': { width: 2048, height: 1152 },
+    '9:16': { width: 1152, height: 2048 },
+    '4:3':  { width: 2048, height: 1536 },
+    '3:4':  { width: 1536, height: 2048 },
   };
   const { width, height } = dimensions[aspectRatio] || dimensions['16:9'];
 

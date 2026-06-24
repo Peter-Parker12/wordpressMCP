@@ -287,7 +287,7 @@ const MCP_TOOLS = [
       required: ['prompt'],
       properties: {
         prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
-        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '16:9' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '1:1' },
         filename: { type: 'string', description: 'Filename to use when saving to WordPress (default: generated-image.png)' },
       },
     },
@@ -300,7 +300,7 @@ const MCP_TOOLS = [
       required: ['prompt', 'title', 'content'],
       properties: {
         prompt: { type: 'string', description: 'Text prompt describing the featured image to generate' },
-        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '16:9' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '1:1' },
         title: { type: 'string', description: 'Post title' },
         content: { type: 'string', description: 'Post body content (HTML supported)' },
         status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
@@ -323,7 +323,7 @@ const MCP_TOOLS = [
         excerpt: { type: 'string', description: 'Short excerpt' },
         categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
         tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
-        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio for all generated images (default: 16:9)', default: '16:9' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio for all generated images (default: 16:9)', default: '1:1' },
       },
     },
   },

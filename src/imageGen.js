@@ -8,11 +8,11 @@ const axios = require('axios');
  * @param {string} [options.aspectRatio] - '1:1' | '16:9' | '9:16' | '4:3' | '3:4' (default '16:9')
  * @returns {Promise<{ base64: string, mimeType: string }[]>}
  */
-async function generateImage({ prompt, aspectRatio = '16:9' }) {
+async function generateImage({ prompt, aspectRatio = '1:1' }) {
   const dimensions = {
+    '1:1':  { width: 1024, height: 1024 },
     '16:9': { width: 1280, height: 720 },
     '9:16': { width: 720,  height: 1280 },
-    '1:1':  { width: 1024, height: 1024 },
     '4:3':  { width: 1024, height: 768 },
     '3:4':  { width: 768,  height: 1024 },
   };

@@ -85,6 +85,44 @@ function createWordPressClient({ url, username, password }) {
     return response.data;
   }
 
+  /**
+   * Update Yoast SEO / RankMath meta fields on an existing post.
+   * Yoast SEO exposes these via the REST `meta` field when the plugin is active.
+   * RankMath uses `rank_math_focus_keyword`, `rank_math_description`, etc.
+   *
+   * @param {number} postId
+   * @param {{ focusKeyword?: string, metaDescription?: string, seoTitle?: string }} seoMeta
+   */
+  async function updatePostSeoMeta(postId, seoMeta) {
+    // Build meta object — include both Yoast and RankMath field names
+    // so the update works regardless of which SEO plugin is installed.
+    const meta = {};
+
+    if (seoMeta.focusKeyword) {
+      meta._yoast_wpseo_focuskw = seoMeta.focusKeyword;
+      meta.rank_math_focus_keyword = seoMeta.focusKeyword;
+    }
+    if (seoMeta.metaDescription) {
+      meta._yoast_wpseo_metadesc = seoMeta.metaDescription;
+      meta.rank_math_description = seoMeta.metaDescription;
+    }
+    if (seoMeta.seoTitle) {
+      meta._yoast_wpseo_title = seoMeta.seoTitle;
+      meta.rank_math_title = seoMeta.seoTitle;
+    }
+
+    if (Object.keys(meta).length === 0) return null;
+
+    try {
+      const response = await client.post(`/posts/${postId}`, { meta });
+      return response.data;
+    } catch (err) {
+      // SEO meta update is best-effort — don't fail the whole post creation
+      console.warn(`[SEO meta] Could not update post ${postId} meta:`, err.message);
+      return null;
+    }
+  }
+
   return {
     createPost,
     updatePost,
@@ -93,6 +131,7 @@ function createWordPressClient({ url, username, password }) {
     uploadMedia,
     setFeaturedImage,
     getCurrentUser,
+    updatePostSeoMeta,
   };
 }
 

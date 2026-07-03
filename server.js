@@ -5,6 +5,7 @@ const { createWordPressClient } = require('./src/wordpress');
 const tokens = require('./src/tokens');
 const { generateImage } = require('./src/imageGen');
 const { extractImagePrompts, insertImagesIntoContent } = require('./src/promptExtractor');
+const { enrichPost, injectPostUrl } = require('./src/seoEnhancer');
 
 dotenv.config();
 
@@ -21,6 +22,9 @@ if (!WP_URL || !WP_USERNAME || !WP_APP_PASSWORD) {
 }
 if (!process.env.GEMINI_API_KEY) {
   console.warn('WARNING: GEMINI_API_KEY not set — generate_image tools will not work');
+}
+if (!process.env.SITE_NAME) {
+  console.warn('WARNING: SITE_NAME not set — Article schema publisher name will be blank. Set SITE_NAME in .env');
 }
 if (!CLAUDE_CLIENT_ID || !CLAUDE_CLIENT_SECRET) {
   console.error('ERROR: CLAUDE_CLIENT_ID and CLAUDE_CLIENT_SECRET not set. Enter the same values in Claude connector settings.');
@@ -327,6 +331,79 @@ const MCP_TOOLS = [
       },
     },
   },
+  {
+    name: 'create_seo_post',
+    description: 'Create a WordPress post fully optimized for SEO and AEO (Answer Engine Optimization). Automatically injects: Table of Contents, FAQ schema for People Also Ask, Article JSON-LD schema, human-centric writing signals (transition words, conversational hooks), keyword density check, reading time badge, and Yoast/RankMath meta fields. Best used when you want the post to rank well on Google and appear in AI-generated answers.',
+    inputSchema: {
+      type: 'object',
+      required: ['title', 'content'],
+      properties: {
+        title: { type: 'string', description: 'Post title — should include the focus keyword' },
+        content: { type: 'string', description: 'Post body HTML. Use H2 headings for sections. The tool will automatically add TOC, schema markup, and human signals.' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt (used as meta description if meta_description not provided)' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+        focus_keyword: { type: 'string', description: 'Primary SEO keyword to rank for. Will be checked in title, first paragraph, H2s, and meta description.' },
+        secondary_keywords: { type: 'array', items: { type: 'string' }, description: 'LSI / related keywords for topic coverage' },
+        meta_description: { type: 'string', description: 'SEO meta description (150-160 chars ideal). Set via Yoast/RankMath if plugin installed.' },
+        seo_title: { type: 'string', description: 'Custom SEO title tag (overrides post title in SERPs)' },
+        faq_items: {
+          type: 'array',
+          description: 'FAQ items for People Also Ask (AEO). Each item adds a question+answer block with FAQ schema.',
+          items: {
+            type: 'object',
+            required: ['question', 'answer'],
+            properties: {
+              question: { type: 'string', description: 'The question' },
+              answer: { type: 'string', description: 'The answer (HTML allowed)' },
+            },
+          },
+        },
+        author_name: { type: 'string', description: 'Author name for E-E-A-T signals in Article schema' },
+        enable_toc: { type: 'boolean', description: 'Add Table of Contents (default: true)', default: true },
+        image_url: { type: 'string', description: 'Featured image URL' },
+        image_base64: { type: 'string', description: 'Featured image base64' },
+        filename: { type: 'string', description: 'Image filename' },
+        mime_type: { type: 'string', description: 'Image MIME type' },
+      },
+    },
+  },
+  {
+    name: 'create_seo_post_with_ai_images',
+    description: 'The most complete post creation tool: combines full SEO/AEO optimization (TOC, FAQ schema, Article schema, human writing signals, keyword checks) WITH automatic AI image generation per H2 section. Ideal for creating publication-ready, search-optimized blog posts in one step.',
+    inputSchema: {
+      type: 'object',
+      required: ['title', 'content'],
+      properties: {
+        title: { type: 'string', description: 'Post title — should include the focus keyword' },
+        content: { type: 'string', description: 'Post body HTML with H2 section headings.' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Image aspect ratio (default: 16:9)', default: '16:9' },
+        focus_keyword: { type: 'string', description: 'Primary SEO keyword' },
+        secondary_keywords: { type: 'array', items: { type: 'string' }, description: 'LSI / related keywords' },
+        meta_description: { type: 'string', description: 'SEO meta description (150-160 chars ideal)' },
+        seo_title: { type: 'string', description: 'Custom SEO title tag' },
+        faq_items: {
+          type: 'array',
+          description: 'FAQ items for People Also Ask AEO schema',
+          items: {
+            type: 'object',
+            required: ['question', 'answer'],
+            properties: {
+              question: { type: 'string' },
+              answer: { type: 'string' },
+            },
+          },
+        },
+        author_name: { type: 'string', description: 'Author name for E-E-A-T signals' },
+        enable_toc: { type: 'boolean', description: 'Add Table of Contents (default: true)', default: true },
+      },
+    },
+  },
 ];
 
 // ─── Tool Runner ──────────────────────────────────────────────────────────────
@@ -476,6 +553,152 @@ async function runTool(name, args) {
         images_generated: uploadedImages.length,
         images: uploadedImages,
         prompts_used: prompts,
+      };
+    }
+
+    case 'create_seo_post': {
+      // 1. Upload featured image if provided
+      let featuredMediaId;
+      let featuredImageUrl;
+      if (args.image_url || args.image_base64) {
+        const media = await wp.uploadMedia({
+          imageUrl: args.image_url,
+          imageBase64: args.image_base64,
+          fileName: args.filename,
+          mimeType: args.mime_type,
+        });
+        featuredMediaId = media.id;
+        featuredImageUrl = media.source_url;
+      }
+
+      // 2. Enrich content with SEO/AEO signals
+      const seoResult = enrichPost({
+        title: args.title,
+        content: args.content,
+        focusKeyword: args.focus_keyword,
+        secondaryKeywords: args.secondary_keywords,
+        metaDescription: args.meta_description || args.excerpt || '',
+        faqItems: args.faq_items || [],
+        enableToc: args.enable_toc !== false,
+        authorName: args.author_name || '',
+        imageUrl: featuredImageUrl || '',
+        siteUrl: process.env.WP_URL || '',
+        siteName: process.env.SITE_NAME || '',
+      });
+
+      console.log(`  SEO score: ${seoResult.seoScore}/100, warnings: ${seoResult.seoWarnings.length}`);
+
+      // 3. Create WordPress post (draft first so we get the real URL)
+      const p = await wp.createPost({
+        title: args.title,
+        content: seoResult.content,
+        status: args.status || 'draft',
+        excerpt: seoResult.metaDescription || args.excerpt,
+        categories: args.categories,
+        tags: args.tags,
+        featured_media: featuredMediaId,
+      });
+
+      // 4. Inject real post URL into Article JSON-LD schema, then update the post
+      const finalContent = injectPostUrl(seoResult.content, p.link);
+      if (finalContent !== seoResult.content) {
+        await wp.updatePost(p.id, { content: finalContent });
+      }
+
+      // 5. Update SEO plugin meta fields (best-effort)
+      await wp.updatePostSeoMeta(p.id, {
+        focusKeyword: args.focus_keyword,
+        metaDescription: seoResult.metaDescription,
+        seoTitle: args.seo_title,
+      });
+
+      return {
+        post_id: p.id,
+        post_link: p.link,
+        status: p.status,
+        seo_score: seoResult.seoScore,
+        reading_time_minutes: seoResult.readingTime,
+        keyword_density_pct: seoResult.keywordDensityPct,
+        seo_warnings: seoResult.seoWarnings,
+        faq_items_added: (args.faq_items || []).length,
+        toc_enabled: args.enable_toc !== false,
+      };
+    }
+
+    case 'create_seo_post_with_ai_images': {
+      // 1. Extract image prompts from raw content
+      const rawPrompts = extractImagePrompts(args.content, args.title);
+      console.log(`  Extracted ${rawPrompts.length} image prompts for SEO post`);
+
+      // 2. Generate & upload images
+      const aspectRatio = args.aspect_ratio || '16:9';
+      const uploadedImages = [];
+      for (let i = 0; i < rawPrompts.length; i++) {
+        console.log(`  Generating image ${i + 1}/${rawPrompts.length}: ${rawPrompts[i].slice(0, 80)}...`);
+        const [img] = await generateImage({ prompt: rawPrompts[i], aspectRatio });
+        const media = await wp.uploadMedia({
+          imageBase64: img.base64,
+          fileName: `seo-image-${i + 1}.jpg`,
+          mimeType: img.mimeType,
+        });
+        uploadedImages.push({ url: media.source_url, mediaId: media.id });
+      }
+
+      // 3. Embed images into content
+      const contentWithImages = insertImagesIntoContent(args.content, uploadedImages);
+
+      // 4. Enrich with SEO/AEO signals
+      const seoResult = enrichPost({
+        title: args.title,
+        content: contentWithImages,
+        focusKeyword: args.focus_keyword,
+        secondaryKeywords: args.secondary_keywords,
+        metaDescription: args.meta_description || args.excerpt || '',
+        faqItems: args.faq_items || [],
+        enableToc: args.enable_toc !== false,
+        authorName: args.author_name || '',
+        imageUrl: uploadedImages[0]?.url || '',
+        siteUrl: process.env.WP_URL || '',
+        siteName: process.env.SITE_NAME || '',
+      });
+
+      console.log(`  SEO score: ${seoResult.seoScore}/100`);
+
+      // 5. Create post with first image as featured
+      const p = await wp.createPost({
+        title: args.title,
+        content: seoResult.content,
+        status: args.status || 'draft',
+        excerpt: seoResult.metaDescription || args.excerpt,
+        categories: args.categories,
+        tags: args.tags,
+        featured_media: uploadedImages[0]?.mediaId,
+      });
+
+      // 6. Inject real post URL into Article JSON-LD, then update post
+      const finalContent = injectPostUrl(seoResult.content, p.link);
+      if (finalContent !== seoResult.content) {
+        await wp.updatePost(p.id, { content: finalContent });
+      }
+
+      // 7. Update SEO plugin meta (best-effort)
+      await wp.updatePostSeoMeta(p.id, {
+        focusKeyword: args.focus_keyword,
+        metaDescription: seoResult.metaDescription,
+        seoTitle: args.seo_title,
+      });
+
+      return {
+        post_id: p.id,
+        post_link: p.link,
+        status: p.status,
+        images_generated: uploadedImages.length,
+        seo_score: seoResult.seoScore,
+        reading_time_minutes: seoResult.readingTime,
+        keyword_density_pct: seoResult.keywordDensityPct,
+        seo_warnings: seoResult.seoWarnings,
+        faq_items_added: (args.faq_items || []).length,
+        toc_enabled: args.enable_toc !== false,
       };
     }
 

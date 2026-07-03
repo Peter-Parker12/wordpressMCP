@@ -5,7 +5,7 @@ const { createWordPressClient } = require('./src/wordpress');
 const tokens = require('./src/tokens');
 const { generateImage } = require('./src/imageGen');
 const { extractImagePrompts, insertImagesIntoContent } = require('./src/promptExtractor');
-const { enrichPost, injectPostUrl } = require('./src/seoEnhancer');
+const { enrichPost, injectPostUrl, injectInternalLinks } = require('./src/seoEnhancer');
 
 dotenv.config();
 
@@ -362,10 +362,24 @@ const MCP_TOOLS = [
         },
         author_name: { type: 'string', description: 'Author name for E-E-A-T signals in Article schema' },
         enable_toc: { type: 'boolean', description: 'Add Table of Contents (default: true)', default: true },
-        image_url: { type: 'string', description: 'Featured image URL' },
+        image_url: { type: 'string', description: 'Featured image URL (direct upload)' },
         image_base64: { type: 'string', description: 'Featured image base64' },
+        canva_image_url: { type: 'string', description: 'Public export URL of a Canva design to use as featured image. Obtain this from the Canva connector export tool, then pass it here.' },
         filename: { type: 'string', description: 'Image filename' },
         mime_type: { type: 'string', description: 'Image MIME type' },
+        internal_links: {
+          type: 'array',
+          description: 'Internal links to inject into the post body and append as a Related Articles block. Each entry links a keyword phrase in the content to another post URL. Boosts SEO score by up to +15 points. Use get_related_posts_for_linking first to discover linkable posts.',
+          items: {
+            type: 'object',
+            required: ['url', 'anchorText'],
+            properties: {
+              url: { type: 'string', description: 'Destination post URL' },
+              anchorText: { type: 'string', description: 'Visible link text (should match or relate to a phrase in the content)' },
+              keyword: { type: 'string', description: 'Exact phrase in the content to hyperlink (defaults to anchorText if omitted)' },
+            },
+          },
+        },
       },
     },
   },
@@ -401,6 +415,88 @@ const MCP_TOOLS = [
         },
         author_name: { type: 'string', description: 'Author name for E-E-A-T signals' },
         enable_toc: { type: 'boolean', description: 'Add Table of Contents (default: true)', default: true },
+        canva_image_url: { type: 'string', description: 'Public export URL of a Canva design to use as the featured image instead of generating one. The AI-generated images will still be used for inline H2 sections.' },
+        internal_links: {
+          type: 'array',
+          description: 'Internal links to inject into the post body + Related Articles block. Use get_related_posts_for_linking to find candidates.',
+          items: {
+            type: 'object',
+            required: ['url', 'anchorText'],
+            properties: {
+              url: { type: 'string' },
+              anchorText: { type: 'string' },
+              keyword: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'create_seo_post_with_canva',
+    description: 'Create a fully SEO/AEO-optimized WordPress post using a Canva-designed featured image combined with AI-generated inline section images. Use this tool when you want professional branded visuals (from Canva) as the hero/featured image while still auto-generating contextual images per H2 section. Workflow: (1) Use the Canva connector to create and export a design, (2) pass the exported public URL as canva_featured_url here, (3) this tool uploads it to WordPress media, generates AI images for each section, enriches content with full SEO/AEO signals, and publishes.',
+    inputSchema: {
+      type: 'object',
+      required: ['title', 'content', 'canva_featured_url'],
+      properties: {
+        title: { type: 'string', description: 'Post title — should include the focus keyword' },
+        content: { type: 'string', description: 'Post body HTML with H2 section headings.' },
+        canva_featured_url: { type: 'string', description: 'Public export URL of the Canva design to use as featured image. Must be a direct image URL (PNG or JPG) obtainable from the Canva connector export.' },
+        canva_filename: { type: 'string', description: 'Filename for the Canva image when saved to WordPress (e.g. featured-banner.png). Default: canva-featured.png' },
+        canva_section_urls: {
+          type: 'array',
+          description: 'Optional: array of Canva export URLs to use as inline section images (one per H2, in order). If provided, these replace AI-generated section images. Use the Canva connector to design and export one image per section, then list the URLs here.',
+          items: { type: 'string', description: 'Direct export URL of a Canva design for this section' },
+        },
+        generate_section_images: { type: 'boolean', description: 'Generate AI images for H2 sections not covered by canva_section_urls (default: true). Set false to skip all AI section images.', default: true },
+        aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '9:16', '4:3', '3:4'], description: 'Aspect ratio for AI-generated section images (default: 16:9)', default: '16:9' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+        focus_keyword: { type: 'string', description: 'Primary SEO keyword' },
+        secondary_keywords: { type: 'array', items: { type: 'string' }, description: 'LSI / related keywords' },
+        meta_description: { type: 'string', description: 'SEO meta description (150-160 chars ideal)' },
+        seo_title: { type: 'string', description: 'Custom SEO title tag' },
+        faq_items: {
+          type: 'array',
+          description: 'FAQ items for People Also Ask AEO schema',
+          items: {
+            type: 'object',
+            required: ['question', 'answer'],
+            properties: {
+              question: { type: 'string' },
+              answer: { type: 'string' },
+            },
+          },
+        },
+        author_name: { type: 'string', description: 'Author name for E-E-A-T signals' },
+        enable_toc: { type: 'boolean', description: 'Add Table of Contents (default: true)', default: true },
+        internal_links: {
+          type: 'array',
+          description: 'Internal links to inject into post body + Related Articles block. Use get_related_posts_for_linking to find candidates.',
+          items: {
+            type: 'object',
+            required: ['url', 'anchorText'],
+            properties: {
+              url: { type: 'string' },
+              anchorText: { type: 'string' },
+              keyword: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'get_related_posts_for_linking',
+    description: 'Fetch existing published WordPress posts that are suitable for internal linking. Returns a ready-to-use internal_links array you can pass directly to any create_seo_post* tool. Run this BEFORE creating a post to discover linkable posts in the same category or by keyword, then pass the result as internal_links.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        search: { type: 'string', description: 'Keyword to filter posts by (e.g. the focus keyword of the new post, or related terms)' },
+        category_id: { type: 'integer', description: 'Filter by category ID to find topically related posts' },
+        per_page: { type: 'integer', description: 'Number of posts to return (default: 5, max: 10)', default: 5 },
       },
     },
   },
@@ -425,6 +521,30 @@ async function runTool(name, args) {
         link: p.link,
         excerpt: p.excerpt?.rendered?.replace(/<[^>]+>/g, '').trim(),
       }));
+    }
+
+    case 'get_related_posts_for_linking': {
+      // Fetch published posts filtered by keyword/category for internal linking
+      const query = {
+        per_page: Math.min(args.per_page || 5, 10),
+        status: 'publish',
+      };
+      if (args.search) query.search = args.search;
+      if (args.category_id) query.categories = [args.category_id];
+      const posts = await wp.getPosts(query);
+      // Return in ready-to-use internal_links format
+      const internal_links = posts.map(p => ({
+        url: p.link,
+        anchorText: p.title?.rendered?.replace(/<[^>]+>/g, '').trim() || '',
+        keyword: p.title?.rendered?.replace(/<[^>]+>/g, '').trim() || '',
+        post_id: p.id,
+        excerpt: p.excerpt?.rendered?.replace(/<[^>]+>/g, '').trim(),
+      }));
+      return {
+        internal_links,
+        usage: 'Pass the internal_links array (or a subset) directly to create_seo_post_with_ai_images, create_seo_post, or create_seo_post_with_canva. You can edit anchorText and keyword to match phrases that appear naturally in your new post content.',
+        count: internal_links.length,
+      };
     }
 
     case 'get_post': {
@@ -557,18 +677,20 @@ async function runTool(name, args) {
     }
 
     case 'create_seo_post': {
-      // 1. Upload featured image if provided
+      // 1. Upload featured image — priority: canva_image_url > image_url > image_base64
       let featuredMediaId;
       let featuredImageUrl;
-      if (args.image_url || args.image_base64) {
+      const featuredSrc = args.canva_image_url || args.image_url;
+      if (featuredSrc || args.image_base64) {
         const media = await wp.uploadMedia({
-          imageUrl: args.image_url,
+          imageUrl: featuredSrc,
           imageBase64: args.image_base64,
-          fileName: args.filename,
+          fileName: args.filename || (args.canva_image_url ? 'canva-featured.png' : undefined),
           mimeType: args.mime_type,
         });
         featuredMediaId = media.id;
         featuredImageUrl = media.source_url;
+        if (args.canva_image_url) console.log(`  Canva featured image uploaded: ${featuredImageUrl}`);
       }
 
       // 2. Enrich content with SEO/AEO signals
@@ -584,6 +706,7 @@ async function runTool(name, args) {
         imageUrl: featuredImageUrl || '',
         siteUrl: process.env.WP_URL || '',
         siteName: process.env.SITE_NAME || '',
+        internalLinks: args.internal_links || [],
       });
 
       console.log(`  SEO score: ${seoResult.seoScore}/100, warnings: ${seoResult.seoWarnings.length}`);
@@ -622,15 +745,30 @@ async function runTool(name, args) {
         seo_warnings: seoResult.seoWarnings,
         faq_items_added: (args.faq_items || []).length,
         toc_enabled: args.enable_toc !== false,
+        internal_links_injected: seoResult.internalLinksInjected,
       };
     }
 
     case 'create_seo_post_with_ai_images': {
-      // 1. Extract image prompts from raw content
+      // 1. If canva_image_url provided, upload it as featured image first (Phase 4 hybrid)
+      let canvaFeaturedMediaId;
+      let canvaFeaturedUrl;
+      if (args.canva_image_url) {
+        console.log(`  Uploading Canva featured image: ${args.canva_image_url.slice(0, 80)}...`);
+        const canvaMedia = await wp.uploadMedia({
+          imageUrl: args.canva_image_url,
+          fileName: 'canva-featured.png',
+        });
+        canvaFeaturedMediaId = canvaMedia.id;
+        canvaFeaturedUrl = canvaMedia.source_url;
+        console.log(`  Canva featured image uploaded: ${canvaFeaturedUrl}`);
+      }
+
+      // 2. Extract image prompts from raw content (for inline section images)
       const rawPrompts = extractImagePrompts(args.content, args.title);
       console.log(`  Extracted ${rawPrompts.length} image prompts for SEO post`);
 
-      // 2. Generate & upload images
+      // 3. Generate & upload AI section images
       const aspectRatio = args.aspect_ratio || '16:9';
       const uploadedImages = [];
       for (let i = 0; i < rawPrompts.length; i++) {
@@ -644,10 +782,12 @@ async function runTool(name, args) {
         uploadedImages.push({ url: media.source_url, mediaId: media.id });
       }
 
-      // 3. Embed images into content
+      // 4. Embed inline images into content
       const contentWithImages = insertImagesIntoContent(args.content, uploadedImages);
 
-      // 4. Enrich with SEO/AEO signals
+      // 5. Enrich with SEO/AEO signals
+      // Featured image for schema: prefer Canva > first AI image
+      const schemaImageUrl = canvaFeaturedUrl || uploadedImages[0]?.url || '';
       const seoResult = enrichPost({
         title: args.title,
         content: contentWithImages,
@@ -657,14 +797,16 @@ async function runTool(name, args) {
         faqItems: args.faq_items || [],
         enableToc: args.enable_toc !== false,
         authorName: args.author_name || '',
-        imageUrl: uploadedImages[0]?.url || '',
+        imageUrl: schemaImageUrl,
         siteUrl: process.env.WP_URL || '',
         siteName: process.env.SITE_NAME || '',
+        internalLinks: args.internal_links || [],
       });
 
       console.log(`  SEO score: ${seoResult.seoScore}/100`);
 
-      // 5. Create post with first image as featured
+      // 6. Create post — featured media: Canva image if available, else first AI image
+      const featuredMediaId = canvaFeaturedMediaId || uploadedImages[0]?.mediaId;
       const p = await wp.createPost({
         title: args.title,
         content: seoResult.content,
@@ -672,16 +814,16 @@ async function runTool(name, args) {
         excerpt: seoResult.metaDescription || args.excerpt,
         categories: args.categories,
         tags: args.tags,
-        featured_media: uploadedImages[0]?.mediaId,
+        featured_media: featuredMediaId,
       });
 
-      // 6. Inject real post URL into Article JSON-LD, then update post
+      // 7. Inject real post URL into Article JSON-LD, then update post
       const finalContent = injectPostUrl(seoResult.content, p.link);
       if (finalContent !== seoResult.content) {
         await wp.updatePost(p.id, { content: finalContent });
       }
 
-      // 7. Update SEO plugin meta (best-effort)
+      // 8. Update SEO plugin meta (best-effort)
       await wp.updatePostSeoMeta(p.id, {
         focusKeyword: args.focus_keyword,
         metaDescription: seoResult.metaDescription,
@@ -692,7 +834,126 @@ async function runTool(name, args) {
         post_id: p.id,
         post_link: p.link,
         status: p.status,
-        images_generated: uploadedImages.length,
+        featured_image_source: canvaFeaturedMediaId ? 'canva' : 'ai_generated',
+        canva_featured_url: canvaFeaturedUrl || null,
+        ai_section_images: uploadedImages.length,
+        seo_score: seoResult.seoScore,
+        reading_time_minutes: seoResult.readingTime,
+        keyword_density_pct: seoResult.keywordDensityPct,
+        seo_warnings: seoResult.seoWarnings,
+        faq_items_added: (args.faq_items || []).length,
+        toc_enabled: args.enable_toc !== false,
+        internal_links_injected: seoResult.internalLinksInjected,
+      };
+    }
+
+    case 'create_seo_post_with_canva': {
+      // 1. Upload Canva featured image (required)
+      console.log(`  Uploading Canva featured image: ${args.canva_featured_url.slice(0, 80)}...`);
+      const canvaMedia = await wp.uploadMedia({
+        imageUrl: args.canva_featured_url,
+        fileName: args.canva_filename || 'canva-featured.png',
+      });
+      const canvaMediaId = canvaMedia.id;
+      const canvaMediaUrl = canvaMedia.source_url;
+      console.log(`  Canva featured image uploaded: ${canvaMediaUrl}`);
+
+      // 2. Handle section images: Canva section URLs take priority over AI generation
+      const canvaSectionUrls = args.canva_section_urls || [];
+      const generateSections = args.generate_section_images !== false;
+      let contentToEnrich = args.content;
+
+      if (canvaSectionUrls.length > 0 || generateSections) {
+        const sectionImages = [];
+
+        // Upload Canva section images first (in order, matching H2 sections)
+        for (let i = 0; i < canvaSectionUrls.length; i++) {
+          console.log(`  Uploading Canva section image ${i + 1}/${canvaSectionUrls.length}...`);
+          const media = await wp.uploadMedia({
+            imageUrl: canvaSectionUrls[i],
+            fileName: `canva-section-${i + 1}.png`,
+          });
+          sectionImages.push({ url: media.source_url, mediaId: media.id });
+          console.log(`  Canva section ${i + 1} uploaded: ${media.source_url}`);
+        }
+
+        // If fewer Canva images than H2 sections, fill remaining with AI-generated images
+        if (generateSections && sectionImages.length < 3) {
+          const sectionPrompts = extractImagePrompts(args.content, args.title);
+          const remaining = sectionPrompts.slice(sectionImages.length);
+          console.log(`  Generating ${remaining.length} AI images for remaining sections...`);
+          const aspectRatio = args.aspect_ratio || '16:9';
+          for (let i = 0; i < remaining.length; i++) {
+            const idx = sectionImages.length + i;
+            console.log(`  AI section image ${idx + 1}: ${remaining[i].slice(0, 80)}...`);
+            const [img] = await generateImage({ prompt: remaining[i], aspectRatio });
+            const media = await wp.uploadMedia({
+              imageBase64: img.base64,
+              fileName: `section-image-${idx + 1}.jpg`,
+              mimeType: img.mimeType,
+            });
+            sectionImages.push({ url: media.source_url, mediaId: media.id });
+          }
+        }
+
+        if (sectionImages.length > 0) {
+          contentToEnrich = insertImagesIntoContent(args.content, sectionImages);
+          console.log(`  Embedded ${sectionImages.length} section images (${canvaSectionUrls.length} Canva + ${sectionImages.length - canvaSectionUrls.length} AI)`);
+        }
+      }
+
+      // 3. Enrich with SEO/AEO signals (Canva image URL used in Article schema)
+      const seoResult = enrichPost({
+        title: args.title,
+        content: contentToEnrich,
+        focusKeyword: args.focus_keyword,
+        secondaryKeywords: args.secondary_keywords,
+        metaDescription: args.meta_description || args.excerpt || '',
+        faqItems: args.faq_items || [],
+        enableToc: args.enable_toc !== false,
+        authorName: args.author_name || '',
+        imageUrl: canvaMediaUrl,
+        siteUrl: process.env.WP_URL || '',
+        siteName: process.env.SITE_NAME || '',
+        internalLinks: args.internal_links || [],
+      });
+
+      console.log(`  SEO score: ${seoResult.seoScore}/100`);
+
+      // 4. Create post with Canva image as featured
+      const p = await wp.createPost({
+        title: args.title,
+        content: seoResult.content,
+        status: args.status || 'draft',
+        excerpt: seoResult.metaDescription || args.excerpt,
+        categories: args.categories,
+        tags: args.tags,
+        featured_media: canvaMediaId,
+      });
+
+      // 5. Inject real post URL into Article JSON-LD
+      const finalContent = injectPostUrl(seoResult.content, p.link);
+      if (finalContent !== seoResult.content) {
+        await wp.updatePost(p.id, { content: finalContent });
+      }
+
+      // 6. Update SEO plugin meta (best-effort)
+      await wp.updatePostSeoMeta(p.id, {
+        focusKeyword: args.focus_keyword,
+        metaDescription: seoResult.metaDescription,
+        seoTitle: args.seo_title,
+      });
+
+      return {
+        post_id: p.id,
+        post_link: p.link,
+        status: p.status,
+        featured_image_source: 'canva',
+        canva_featured_url: canvaMediaUrl,
+        canva_media_id: canvaMediaId,
+        canva_section_images: (args.canva_section_urls || []).length,
+        section_images_generated: generateSections,
+        internal_links_injected: seoResult.internalLinksInjected,
         seo_score: seoResult.seoScore,
         reading_time_minutes: seoResult.readingTime,
         keyword_density_pct: seoResult.keywordDensityPct,

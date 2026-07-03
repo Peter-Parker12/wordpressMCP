@@ -355,6 +355,76 @@ function highlightSecondaryKeywords(content, keywords) {
   return result;
 }
 
+// ─── Internal Links ───────────────────────────────────────────────────────────
+
+/**
+ * Inject internal links into paragraph text.
+ * For each link entry, finds the first occurrence of the target keyword/anchor
+ * inside a <p> tag (not inside headings, not already inside <a> tags) and wraps
+ * it with the provided href.
+ *
+ * @param {string} content
+ * @param {Array<{url: string, anchorText: string, keyword?: string}>} links
+ *   - url:        Destination URL (WordPress post URL)
+ *   - anchorText: Visible link text shown to user
+ *   - keyword:    Text to search for in content (defaults to anchorText)
+ * @returns {string}
+ */
+function injectInternalLinks(content, links) {
+  if (!links || links.length === 0) return content;
+
+  let result = content;
+
+  for (const link of links) {
+    const searchTerm = (link.keyword || link.anchorText || '').trim();
+    if (!searchTerm || !link.url || !link.anchorText) continue;
+
+    const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Match inside <p>...</p> blocks only, not headings or existing <a> tags
+    // Strategy: iterate paragraph blocks, replace first matching term not inside <a>
+    let replaced = false;
+    result = result.replace(/<p([^>]*)>([\s\S]*?)<\/p>/gi, (match, attrs, inner) => {
+      if (replaced) return match;
+      // Skip if the term is already linked in this paragraph
+      if (new RegExp(`<a[^>]*>[^<]*${escaped}[^<]*</a>`, 'i').test(inner)) return match;
+      // Replace first bare occurrence
+      const termPattern = new RegExp(`(?<![">])\\b(${escaped})\\b(?![^<]*>)`, 'i');
+      if (!termPattern.test(inner)) return match;
+      const newInner = inner.replace(termPattern, (m) => {
+        replaced = true;
+        return `<a href="${link.url}" title="${link.anchorText}">${link.anchorText}</a>`;
+      });
+      return `<p${attrs}>${newInner}</p>`;
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Build a "Related Articles" block appended near the end of the post.
+ * Helps with internal linking equity distribution and keeps users on site.
+ *
+ * @param {Array<{url: string, anchorText: string}>} links
+ * @returns {string} HTML block
+ */
+function buildRelatedArticlesBlock(links) {
+  if (!links || links.length === 0) return '';
+
+  const items = links.map(({ url, anchorText }) =>
+    `<li><a href="${url}">${anchorText}</a></li>`
+  ).join('\n');
+
+  return `
+<div class="wp-block-group seo-related-posts" style="background:#f0f7ff;border-left:4px solid #0073aa;padding:16px 20px;margin:32px 0;border-radius:4px">
+<p><strong>📖 Bài viết liên quan</strong></p>
+<ul style="margin:8px 0 0 0;padding-left:20px;line-height:2">
+${items}
+</ul>
+</div>`;
+}
+
 // ─── Post URL Placeholder ─────────────────────────────────────────────────────
 
 /** Sentinel used to mark where the real post URL should be injected after creation. */
@@ -390,6 +460,7 @@ function injectPostUrl(content, postUrl) {
  * @param {string} [opts.imageUrl]
  * @param {string} [opts.siteUrl]
  * @param {string} [opts.siteName]
+ * @param {Array<{url:string,anchorText:string,keyword?:string}>} [opts.internalLinks]
  *
  * @returns {{
  *   content: string,
@@ -413,6 +484,7 @@ function enrichPost(opts) {
     imageUrl = '',
     siteUrl = '',
     siteName = '',
+    internalLinks = [],
   } = opts;
 
   let content = rawContent;
@@ -448,12 +520,22 @@ function enrichPost(opts) {
   const readingTime = estimateReadingTime(content);
   content = addReadingTimeBadge(content, readingTime);
 
-  // 6. Append FAQ section
+  // 6. Inject internal links into paragraph text (before FAQ/schema blocks)
+  if (internalLinks.length > 0) {
+    content = injectInternalLinks(content, internalLinks);
+  }
+
+  // 7. Append Related Articles block (before FAQ)
+  if (internalLinks.length > 0) {
+    content += '\n' + buildRelatedArticlesBlock(internalLinks);
+  }
+
+  // 8. Append FAQ section
   if (faqItems.length > 0) {
     content += '\n' + buildFAQSection(faqItems);
   }
 
-  // 7. Append Article JSON-LD schema at end.
+  // 9. Append Article JSON-LD schema at end.
   //    Use POST_URL_PLACEHOLDER — will be replaced with real URL after WP post creation.
   const articleSchema = buildArticleSchema({
     title,
@@ -467,27 +549,35 @@ function enrichPost(opts) {
   });
   content += '\n' + articleSchema;
 
-  // 7. Validate meta description
+  // 10. Validate meta description
   const { value: metaDescription, warning: metaWarning } = validateMetaDescription(rawMeta);
   if (metaWarning) seoWarnings.push(metaWarning);
 
-  // 8. Audit keyword placement
+  // 11. Audit keyword placement
   const kwWarnings = auditKeywordPlacement(content, title, metaDescription, focusKeyword);
   seoWarnings.push(...kwWarnings);
 
-  // 9. Keyword density
+  // 12. Keyword density
   const kwDensity = keywordDensity(content, focusKeyword);
   if (focusKeyword) {
     if (kwDensity < 0.5) seoWarnings.push(`Keyword density too low: ${kwDensity}% (ideal: 0.5–2.5%)`);
     if (kwDensity > 3) seoWarnings.push(`Keyword density too high: ${kwDensity}% (risk of over-optimization)`);
   }
 
-  // 10. Calculate simple SEO score (0-100)
+  // 13. Internal links audit
+  if (internalLinks.length === 0) {
+    seoWarnings.push('No internal links provided — add internal_links to improve SEO score and crawlability');
+  }
+
+  // 14. Calculate SEO score (0-100)
+  //  Base: 100, deduct per warning, bonus for internal links
   let seoScore = 100;
-  seoScore -= seoWarnings.length * 10;
+  seoScore -= seoWarnings.filter(w => !w.includes('internal links')).length * 10;
   if (!focusKeyword) seoScore -= 20;
   if (!faqItems.length) seoScore -= 10;
   if (!enableToc) seoScore -= 5;
+  if (internalLinks.length === 0) seoScore -= 10;
+  else if (internalLinks.length >= 3) seoScore = Math.min(100, seoScore + 5); // bonus for 3+ internal links
   seoScore = Math.max(0, Math.min(100, seoScore));
 
   return {
@@ -497,12 +587,15 @@ function enrichPost(opts) {
     keywordDensityPct: kwDensity,
     seoWarnings,
     seoScore,
+    internalLinksInjected: internalLinks.length,
   };
 }
 
 module.exports = {
   enrichPost,
   injectPostUrl,
+  injectInternalLinks,
+  buildRelatedArticlesBlock,
   buildTableOfContents,
   buildFAQSection,
   buildArticleSchema,

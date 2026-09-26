@@ -1,13 +1,14 @@
 # WordPress MCP Server
 
-A local Node.js server that exposes WordPress REST API operations for Claude or other MCP-enabled tools.
+A Node.js MCP server that exposes WordPress operations as tools for Claude.
 
 ## What this does
 
-- Creates new WordPress blog posts
-- Updates existing posts
-- Uploads images to WordPress media
-- Attaches an uploaded image as a post's featured media
+- Lists and searches WordPress posts
+- Reads the full content of a single post
+- Creates new WordPress posts
+- Uploads images to the WordPress media library
+- Creates a post with a featured image in one step
 
 ## Setup
 
@@ -17,7 +18,7 @@ A local Node.js server that exposes WordPress REST API operations for Claude or 
 npm install
 ```
 
-2. Copy the example environment file and configure your WordPress credentials:
+2. Copy the example environment file and configure your credentials:
 
 ```bash
 cp .env.example .env
@@ -27,7 +28,8 @@ cp .env.example .env
 - `WP_URL`: your self-hosted WordPress base URL, e.g. `https://example.com`
 - `WP_USERNAME`: WordPress username
 - `WP_APP_PASSWORD`: WordPress application password
-- `PORT`: local port for the MCP server (default `9808`)
+- `MCP_BEARER_TOKEN`: a random secret (`openssl rand -hex 32`) that Claude must present to use this server
+- `PORT`: local port for the MCP server (default `9809`)
 
 4. Start the server locally:
 
@@ -49,73 +51,24 @@ If you want to run only the Docker image:
 
 ```bash
 docker build -t wordpress-mcp .
-docker run --env-file .env -p 9808:9808 wordpress-mcp
+docker run --env-file .env -p 9809:9809 wordpress-mcp
 ```
 
-## API Endpoints
+## Tools
 
-- `GET /posts`
-- `GET /posts/:postId`
-- `POST /create-post`
-- `POST /update-post`
-- `POST /upload-image`
-- `POST /create-post-with-image`
-- `POST /set-featured-image`
-- `GET /health`
+The server speaks MCP over JSON-RPC at a single endpoint: `POST /`. It exposes these tools:
 
-## Example requests
+- `get_posts` — list/search posts (`per_page`, `page`, `status`, `search`)
+- `get_post` — full content of one post by `id`
+- `create_post` — create a post (`title`, `content`, `status`, `excerpt`, `categories`, `tags`)
+- `upload_image` — upload an image to the media library (`image_url` or `image_base64`, `filename`, `mime_type`)
+- `create_post_with_image` — upload a featured image and create the post in one call
 
-Create a new post:
-
-```bash
-curl http://localhost:4000/create-post \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Hello from Claude","content":"This is a generated blog post.","status":"draft"}'
-```
-
-Upload an image:
-
-```bash
-curl http://localhost:4000/upload-image \
-  -H "Content-Type: application/json" \
-  -d '{"imageUrl":"https://example.com/image.jpg","fileName":"image.jpg"}'
-```
-
-Create a post with featured media:
-
-```bash
-curl http://localhost:4000/create-post-with-image \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Post with image","content":"Blog content","imageUrl":"https://example.com/image.jpg","fileName":"image.jpg"}'
-```
-
-List posts:
-
-```bash
-curl http://localhost:4000/posts
-```
-
-Get a specific post:
-
-```bash
-curl http://localhost:4000/posts/123
-```
-
-Update a post:
-
-```bash
-curl http://localhost:4000/update-post \
-  -H "Content-Type: application/json" \
-  -d '{"postId":123,"title":"Updated title","content":"Updated content"}'
-```
+Health check: `GET /health`
 
 ## Claude / MCP integration
 
-This project includes a manifest at `mcp-manifest.json` describing the available operations.
-
-The server also exposes the manifest directly at `http://localhost:9808/manifest` (or your public tunnel host).
-
-### Test on Claude
+### Connecting from Claude
 
 1. Start the server locally or in Docker:
 
@@ -123,47 +76,48 @@ The server also exposes the manifest directly at `http://localhost:9808/manifest
 docker compose up -d --build
 ```
 
-2. Confirm the manifest is available:
+2. Confirm it's up:
 
 ```bash
-curl http://127.0.0.1:9809/manifest
+curl http://127.0.0.1:9809/health
 ```
 
-3. In Claude custom connector / integration settings, use:
-- `http://localhost:9809` if Claude runs on the same machine
-- or your tunnel hostname if using Cloudflare, e.g. `https://mcp.yourdomain.com`
+3. In Claude, add a **Custom Connector** with:
+- URL: `http://localhost:9809` if Claude runs on the same machine, or your tunnel hostname (e.g. `https://mcp.yourdomain.com`)
+- Authentication: **No sign-in**
+- Under **Request headers**, add:
+  - Header name: `Authorization`
+  - Value: `Bearer <your MCP_BEARER_TOKEN>` (the same value set in `.env`)
 
-4. Important: set authentication to **No auth / No sign-in service**.
+The server checks this header on every request — no OAuth flow, no per-user sign-in.
 
-This server already authenticates to WordPress using the `.env` values, so Claude should not be configured with OAuth or an OAuth Client ID.
+> Note: Keep your `.env` private. `MCP_BEARER_TOKEN` grants full access to your WordPress site through this server, and `WP_APP_PASSWORD` authenticates to WordPress itself.
 
-5. Configure the connector to use the server endpoints:
-- `GET /health`
-- `GET /manifest`
-- `GET /posts`
-- `GET /posts/:postId`
-- `POST /create-post`
-- `POST /update-post`
-- `POST /upload-image`
-- `POST /set-featured-image`
-- `POST /create-post-with-image`
-- `POST /.well-known/mcp/register` (compatibility)
-- `POST /register` (compatibility)
+### Example requests
 
-6. Run a quick test request in Claude against `/health` or `/manifest`.
-
-### Example validation URL
-
-If your connector settings accept a manifest URL, use:
+List posts:
 
 ```bash
-http://localhost:9809/manifest
+curl http://localhost:9809/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your MCP_BEARER_TOKEN>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_posts","arguments":{"per_page":5}}}'
 ```
 
-or:
+Create a new post:
 
 ```bash
-https://mcp.yourdomain.com/manifest
+curl http://localhost:9809/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your MCP_BEARER_TOKEN>" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_post","arguments":{"title":"Hello from Claude","content":"This is a generated blog post.","status":"draft"}}}'
 ```
 
-> Note: Keep your `.env` private. The server must authenticate to WordPress using an Application Password and the correct site URL.
+Upload an image and create a post with it:
+
+```bash
+curl http://localhost:9809/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your MCP_BEARER_TOKEN>" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_post_with_image","arguments":{"title":"Post with image","content":"Blog content","image_url":"https://example.com/image.jpg","filename":"image.jpg"}}}'
+```

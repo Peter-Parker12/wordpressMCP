@@ -2,7 +2,6 @@ const express = require('express');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 const { createWordPressClient } = require('./src/wordpress');
-const tokens = require('./src/tokens');
 const { generateImage } = require('./src/imageGen');
 const { extractImagePrompts, insertImagesIntoContent } = require('./src/promptExtractor');
 const { enrichPost, injectPostUrl, injectInternalLinks } = require('./src/seoEnhancer');
@@ -13,8 +12,7 @@ const PORT = process.env.PORT || 9809;
 const WP_URL = process.env.WP_URL;
 const WP_USERNAME = process.env.WP_USERNAME;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
-const CLAUDE_CLIENT_ID = process.env.CLAUDE_CLIENT_ID;
-const CLAUDE_CLIENT_SECRET = process.env.CLAUDE_CLIENT_SECRET;
+const MCP_BEARER_TOKEN = process.env.MCP_BEARER_TOKEN;
 
 if (!WP_URL || !WP_USERNAME || !WP_APP_PASSWORD) {
   console.error('ERROR: Missing required env vars. Set WP_URL, WP_USERNAME, and WP_APP_PASSWORD in .env');
@@ -26,8 +24,8 @@ if (!process.env.GEMINI_API_KEY) {
 if (!process.env.SITE_NAME) {
   console.warn('WARNING: SITE_NAME not set — Article schema publisher name will be blank. Set SITE_NAME in .env');
 }
-if (!CLAUDE_CLIENT_ID || !CLAUDE_CLIENT_SECRET) {
-  console.error('ERROR: CLAUDE_CLIENT_ID and CLAUDE_CLIENT_SECRET not set. Enter the same values in Claude connector settings.');
+if (!MCP_BEARER_TOKEN) {
+  console.error('ERROR: MCP_BEARER_TOKEN not set. Generate one with `openssl rand -hex 32`, set it in .env, and add it as the "Authorization" request header (value: `Bearer <token>`) in Claude connector settings.');
   process.exit(1);
 }
 
@@ -55,157 +53,13 @@ app.use((req, res, next) => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getBaseUrl(req) {
-  let scheme = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  if (!scheme && req.headers['cf-visitor']) {
-    try { scheme = JSON.parse(req.headers['cf-visitor']).scheme; } catch {}
-  }
-  if (!scheme) scheme = req.protocol;
-  return `${scheme}://${req.get('host')}`;
+// Constant-time comparison so token checks don't leak timing info
+function isValidToken(tokenStr) {
+  const expected = Buffer.from(MCP_BEARER_TOKEN);
+  const actual = Buffer.from(tokenStr);
+  if (expected.length !== actual.length) return false;
+  return crypto.timingSafeEqual(expected, actual);
 }
-
-function randomToken(bytes = 32) {
-  return crypto.randomBytes(bytes).toString('hex');
-}
-
-function base64url(buf) {
-  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-// ─── OAuth Discovery ──────────────────────────────────────────────────────────
-
-// Tells Claude where the authorization server lives
-app.get('/.well-known/oauth-protected-resource', (req, res) => {
-  const base = getBaseUrl(req);
-  res.json({ resource: base, authorization_servers: [base] });
-});
-
-// Authorization server metadata (RFC 8414)
-app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  const base = getBaseUrl(req);
-  res.json({
-    issuer: base,
-    authorization_endpoint: `${base}/oauth/authorize`,
-    token_endpoint: `${base}/oauth/token`,
-    registration_endpoint: `${base}/register`,
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
-    scopes_supported: ['mcp'],
-    code_challenge_methods_supported: ['S256'],
-  });
-});
-
-// ─── Dynamic Client Registration (RFC 7591) ───────────────────────────────────
-
-// Returns the pre-configured client credentials so Claude uses the values you set in .env
-app.post('/register', (req, res) => {
-  const redirectUris = Array.isArray(req.body.redirect_uris) ? req.body.redirect_uris : [];
-  const base = getBaseUrl(req);
-  console.log(`  Client registration — returning pre-configured client_id: ${CLAUDE_CLIENT_ID}`);
-  res.status(201).json({
-    client_id: CLAUDE_CLIENT_ID,
-    client_secret: CLAUDE_CLIENT_SECRET,
-    client_id_issued_at: Math.floor(Date.now() / 1000),
-    client_secret_expires_at: 0,
-    redirect_uris: redirectUris,
-    grant_types: ['authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    token_endpoint_auth_method: 'client_secret_post',
-    registration_client_uri: `${base}/register/${CLAUDE_CLIENT_ID}`,
-  });
-});
-
-// ─── Authorization Endpoint ───────────────────────────────────────────────────
-
-// Auto-approves — we control this server and trust Claude
-app.get('/oauth/authorize', (req, res) => {
-  const { response_type, client_id, redirect_uri, code_challenge, code_challenge_method, state, scope } = req.query;
-
-  if (response_type !== 'code') return res.status(400).send('Only response_type=code is supported');
-  if (!redirect_uri) return res.status(400).send('Missing redirect_uri');
-
-  const code = randomToken(32);
-  tokens.saveAuthCode(code, { client_id, redirect_uri, code_challenge, code_challenge_method, scope });
-  console.log(`  Auth code issued for client: ${client_id}`);
-
-  const sep = redirect_uri.includes('?') ? '&' : '?';
-  const dest = `${redirect_uri}${sep}code=${encodeURIComponent(code)}${state ? `&state=${encodeURIComponent(state)}` : ''}`;
-  res.redirect(302, dest);
-});
-
-// ─── Token Endpoint ───────────────────────────────────────────────────────────
-
-app.post('/oauth/token', (req, res) => {
-  const { grant_type, code, code_verifier, redirect_uri, refresh_token, client_id, client_secret } = req.body;
-
-  // Validate pre-configured client credentials
-  if (client_id && client_id !== CLAUDE_CLIENT_ID) {
-    return res.status(400).json({ error: 'invalid_client', error_description: 'Unknown client_id' });
-  }
-  if (client_secret && client_secret !== CLAUDE_CLIENT_SECRET) {
-    return res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_secret' });
-  }
-
-  if (grant_type === 'authorization_code') {
-    const authCode = tokens.getAuthCode(code);
-    if (!authCode) {
-      return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
-    }
-
-    // PKCE verification (RFC 7636)
-    if (authCode.code_challenge) {
-      if (!code_verifier) {
-        return res.status(400).json({ error: 'invalid_request', error_description: 'code_verifier required' });
-      }
-      const digest = crypto.createHash('sha256').update(code_verifier).digest();
-      if (base64url(digest) !== authCode.code_challenge) {
-        return res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
-      }
-    }
-
-    if (redirect_uri && redirect_uri !== authCode.redirect_uri) {
-      return res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
-    }
-
-    tokens.deleteAuthCode(code);
-
-    const accessToken = randomToken(32);
-    const newRefreshToken = randomToken(32);
-    tokens.saveToken(accessToken, { clientId: authCode.client_id, scope: authCode.scope || 'mcp', refreshToken: newRefreshToken });
-    console.log(`  Access token issued for client: ${authCode.client_id}`);
-
-    return res.json({
-      access_token: accessToken,
-      token_type: 'Bearer',
-      expires_in: 86400,
-      refresh_token: newRefreshToken,
-      scope: authCode.scope || 'mcp',
-    });
-  }
-
-  if (grant_type === 'refresh_token') {
-    const stored = tokens.getTokenByRefresh(refresh_token);
-    if (stored) tokens.deleteToken(stored.accessToken);
-
-    const newAccessToken = randomToken(32);
-    const newRefreshToken = randomToken(32);
-    const clientId = stored?.clientId || 'claude';
-    const scope = stored?.scope || 'mcp';
-    tokens.saveToken(newAccessToken, { clientId, scope, refreshToken: newRefreshToken });
-    console.log(`  Token refreshed for client: ${clientId}`);
-
-    return res.json({
-      access_token: newAccessToken,
-      token_type: 'Bearer',
-      expires_in: 86400,
-      refresh_token: newRefreshToken,
-      scope,
-    });
-  }
-
-  return res.status(400).json({ error: 'unsupported_grant_type' });
-});
 
 // ─── MCP Tools ────────────────────────────────────────────────────────────────
 
@@ -971,18 +825,11 @@ async function runTool(name, args) {
 // ─── MCP Endpoint ─────────────────────────────────────────────────────────────
 
 app.post('/', async (req, res) => {
-  // Verify OAuth-issued Bearer token
+  // Verify the static Bearer token configured in Claude's connector "Request headers"
   const authHeader = req.headers['authorization'] || '';
-  if (!authHeader.startsWith('Bearer ')) {
-    const base = getBaseUrl(req);
-    res.set('WWW-Authenticate', `Bearer realm="WordPress MCP", resource_metadata="${base}/.well-known/oauth-protected-resource"`);
+  if (!authHeader.startsWith('Bearer ') || !isValidToken(authHeader.slice(7))) {
+    res.set('WWW-Authenticate', 'Bearer realm="WordPress MCP"');
     return res.status(401).json({ error: 'unauthorized' });
-  }
-  const tokenStr = authHeader.slice(7);
-  if (!tokens.getToken(tokenStr)) {
-    const base = getBaseUrl(req);
-    res.set('WWW-Authenticate', `Bearer realm="WordPress MCP", resource_metadata="${base}/.well-known/oauth-protected-resource"`);
-    return res.status(401).json({ error: 'invalid_token' });
   }
 
   const { method, id, params } = req.body;

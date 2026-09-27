@@ -89,6 +89,34 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'get_categories',
+    description: 'Get WordPress categories (id, name, slug, post count). Use this to look up a category ID by name before calling update_post.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        search: { type: 'string', description: 'Search categories by name' },
+        per_page: { type: 'integer', description: 'Categories to return (default 100)', default: 100 },
+      },
+    },
+  },
+  {
+    name: 'update_post',
+    description: "Update an existing WordPress post. Only the fields you provide are changed. IMPORTANT: categories and tags REPLACE the post's current set entirely (WordPress does not merge) — include every category/tag ID you want the post to end up with, e.g. pass [1, <demo_id>] to add the \"demo\" category while keeping Uncategorized, or [<demo_id>] alone to move it fully into demo.",
+    inputSchema: {
+      type: 'object',
+      required: ['post_id'],
+      properties: {
+        post_id: { type: 'integer', description: 'The ID of the post to update' },
+        title: { type: 'string', description: 'New post title' },
+        content: { type: 'string', description: 'New post body content (HTML supported)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'New post status' },
+        excerpt: { type: 'string', description: 'New excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: "Category IDs. Replaces the post's current categories entirely." },
+        tags: { type: 'array', items: { type: 'integer' }, description: "Tag IDs. Replaces the post's current tags entirely." },
+      },
+    },
+  },
+  {
     name: 'create_post',
     description: 'Create a new WordPress post.',
     inputSchema: {
@@ -414,6 +442,20 @@ async function runTool(name, args) {
         tags: p.tags,
         featured_media: p.featured_media,
       };
+    }
+
+    case 'get_categories': {
+      const categories = await wp.getCategories({
+        per_page: args.per_page || 100,
+        search: args.search,
+      });
+      return categories.map(c => ({ id: c.id, name: c.name, slug: c.slug, count: c.count }));
+    }
+
+    case 'update_post': {
+      const { post_id, ...updates } = args;
+      const p = await wp.updatePost(post_id, updates);
+      return { id: p.id, link: p.link, status: p.status, categories: p.categories, tags: p.tags };
     }
 
     case 'create_post': {

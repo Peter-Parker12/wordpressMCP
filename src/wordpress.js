@@ -41,6 +41,11 @@ function createWordPressClient({ url, username, password }) {
     return response.data;
   }
 
+  async function getCategories(query = {}) {
+    const response = await client.get('/categories', { params: query });
+    return response.data;
+  }
+
   async function uploadMedia({ imageUrl, imageBase64, fileName, mimeType }) {
     let buffer;
     let finalFileName = fileName;
@@ -128,6 +133,7 @@ function createWordPressClient({ url, username, password }) {
     updatePost,
     getPosts,
     getPost,
+    getCategories,
     uploadMedia,
     setFeaturedImage,
     getCurrentUser,

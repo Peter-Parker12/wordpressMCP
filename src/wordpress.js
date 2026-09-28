@@ -46,6 +46,21 @@ function createWordPressClient({ url, username, password }) {
     return response.data;
   }
 
+  async function getTags(query = {}) {
+    const response = await client.get('/tags', { params: query });
+    return response.data;
+  }
+
+  async function createTag(payload) {
+    const response = await client.post('/tags', payload);
+    return response.data;
+  }
+
+  async function updateTag(tagId, updates) {
+    const response = await client.post(`/tags/${tagId}`, updates);
+    return response.data;
+  }
+
   async function uploadMedia({ imageUrl, imageBase64, fileName, mimeType }) {
     let buffer;
     let finalFileName = fileName;
@@ -134,6 +149,9 @@ function createWordPressClient({ url, username, password }) {
     getPosts,
     getPost,
     getCategories,
+    getTags,
+    createTag,
+    updateTag,
     uploadMedia,
     setFeaturedImage,
     getCurrentUser,

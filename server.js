@@ -117,6 +117,44 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'get_tags',
+    description: 'Get WordPress tags (id, name, slug, post count). Use this to look up a tag ID by name before calling create_post/update_post, or to check if a tag already exists before create_tag.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        search: { type: 'string', description: 'Search tags by name' },
+        per_page: { type: 'integer', description: 'Tags to return (default 100)', default: 100 },
+      },
+    },
+  },
+  {
+    name: 'create_tag',
+    description: 'Create a new WordPress tag. Fails if a tag with the same name/slug already exists — use get_tags first to check.',
+    inputSchema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'Tag name' },
+        description: { type: 'string', description: 'Tag description' },
+        slug: { type: 'string', description: 'URL slug (auto-generated from name if omitted)' },
+      },
+    },
+  },
+  {
+    name: 'update_tag',
+    description: 'Update an existing WordPress tag (rename it, change its slug or description). Only the fields you provide are changed.',
+    inputSchema: {
+      type: 'object',
+      required: ['tag_id'],
+      properties: {
+        tag_id: { type: 'integer', description: 'The ID of the tag to update' },
+        name: { type: 'string', description: 'New tag name' },
+        description: { type: 'string', description: 'New tag description' },
+        slug: { type: 'string', description: 'New URL slug' },
+      },
+    },
+  },
+  {
     name: 'create_post',
     description: 'Create a new WordPress post.',
     inputSchema: {
@@ -456,6 +494,29 @@ async function runTool(name, args) {
       const { post_id, ...updates } = args;
       const p = await wp.updatePost(post_id, updates);
       return { id: p.id, link: p.link, status: p.status, categories: p.categories, tags: p.tags };
+    }
+
+    case 'get_tags': {
+      const tags = await wp.getTags({
+        per_page: args.per_page || 100,
+        search: args.search,
+      });
+      return tags.map(t => ({ id: t.id, name: t.name, slug: t.slug, count: t.count }));
+    }
+
+    case 'create_tag': {
+      const t = await wp.createTag({
+        name: args.name,
+        description: args.description,
+        slug: args.slug,
+      });
+      return { id: t.id, name: t.name, slug: t.slug };
+    }
+
+    case 'update_tag': {
+      const { tag_id, ...updates } = args;
+      const t = await wp.updateTag(tag_id, updates);
+      return { id: t.id, name: t.name, slug: t.slug };
     }
 
     case 'create_post': {

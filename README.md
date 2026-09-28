@@ -63,6 +63,9 @@ The server speaks MCP over JSON-RPC at a single endpoint: `POST /`. It exposes t
 - `get_categories` — list categories (`id`, `name`, `slug`, `count`), optionally filtered by `search`
 - `create_post` — create a post (`title`, `content`, `status`, `excerpt`, `categories`, `tags`)
 - `update_post` — edit an existing post by `post_id`; only the fields you pass are changed. `categories`/`tags` **replace** the post's current set (not additive)
+- `get_tags` — list tags (`id`, `name`, `slug`, `count`), optionally filtered by `search`
+- `create_tag` — create a new tag (`name`, `description`, `slug`)
+- `update_tag` — rename/edit an existing tag by `tag_id`
 - `upload_image` — upload an image to the media library (`image_url` or `image_base64`, `filename`, `mime_type`)
 - `create_post_with_image` — upload a featured image and create the post in one call
 

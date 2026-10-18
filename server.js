@@ -64,9 +64,10 @@ function isValidToken(tokenStr) {
 // ─── MCP Tools ────────────────────────────────────────────────────────────────
 
 const MCP_TOOLS = [
+  // ─── Posts (CRUD) ─────────────────────────────────────────────────────────
   {
     name: 'get_posts',
-    description: 'Get a list of WordPress posts. Returns ID, title, status, date, and excerpt.',
+    description: 'List/search WordPress posts. Returns ID, title, status, date, and excerpt for each.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -79,7 +80,7 @@ const MCP_TOOLS = [
   },
   {
     name: 'get_post',
-    description: 'Get the full content of a single WordPress post by its ID.',
+    description: 'Get the full content and details of a single WordPress post by its ID.',
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -89,8 +90,57 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: 'create_post',
+    description: 'Create a new WordPress post.',
+    inputSchema: {
+      type: 'object',
+      required: ['title', 'content'],
+      properties: {
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post body content (HTML supported)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
+        excerpt: { type: 'string', description: 'Short excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
+        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+        featured_media: { type: 'integer', description: 'Media ID of an already-uploaded image to use as the featured image (see upload_image)' },
+      },
+    },
+  },
+  {
+    name: 'update_post',
+    description: "Update an existing WordPress post, including unpublishing it (set status to 'draft' or 'private'). Only the fields you provide are changed. IMPORTANT: categories and tags REPLACE the post's current set entirely (WordPress does not merge) — include every category/tag ID you want the post to end up with, e.g. pass [1, <demo_id>] to add the \"demo\" category while keeping Uncategorized, or [<demo_id>] alone to move it fully into demo.",
+    inputSchema: {
+      type: 'object',
+      required: ['post_id'],
+      properties: {
+        post_id: { type: 'integer', description: 'The ID of the post to update' },
+        title: { type: 'string', description: 'New post title' },
+        content: { type: 'string', description: 'New post body content (HTML supported)' },
+        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: "New post status — use 'draft' or 'private' to unpublish" },
+        excerpt: { type: 'string', description: 'New excerpt' },
+        categories: { type: 'array', items: { type: 'integer' }, description: "Category IDs. Replaces the post's current categories entirely." },
+        tags: { type: 'array', items: { type: 'integer' }, description: "Tag IDs. Replaces the post's current tags entirely." },
+        featured_media: { type: 'integer', description: 'Media ID of an already-uploaded image to set as the featured image' },
+      },
+    },
+  },
+  {
+    name: 'delete_post',
+    description: "Delete a WordPress post. By default it's moved to Trash (recoverable). Pass force: true to permanently delete it immediately, skipping Trash.",
+    inputSchema: {
+      type: 'object',
+      required: ['post_id'],
+      properties: {
+        post_id: { type: 'integer', description: 'The ID of the post to delete' },
+        force: { type: 'boolean', description: 'Permanently delete instead of moving to Trash (default: false)', default: false },
+      },
+    },
+  },
+
+  // ─── Categories (CRUD) ────────────────────────────────────────────────────
+  {
     name: 'get_categories',
-    description: 'Get WordPress categories (id, name, slug, post count). Use this to look up a category ID by name before calling update_post.',
+    description: 'List WordPress categories (id, name, slug, post count). Use this to look up a category ID by name before calling create_post/update_post.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -100,30 +150,77 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: 'update_post',
-    description: "Update an existing WordPress post. Only the fields you provide are changed. IMPORTANT: categories and tags REPLACE the post's current set entirely (WordPress does not merge) — include every category/tag ID you want the post to end up with, e.g. pass [1, <demo_id>] to add the \"demo\" category while keeping Uncategorized, or [<demo_id>] alone to move it fully into demo.",
+    name: 'get_category',
+    description: 'Get details of a single WordPress category by its ID.',
     inputSchema: {
       type: 'object',
-      required: ['post_id'],
+      required: ['category_id'],
       properties: {
-        post_id: { type: 'integer', description: 'The ID of the post to update' },
-        title: { type: 'string', description: 'New post title' },
-        content: { type: 'string', description: 'New post body content (HTML supported)' },
-        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'New post status' },
-        excerpt: { type: 'string', description: 'New excerpt' },
-        categories: { type: 'array', items: { type: 'integer' }, description: "Category IDs. Replaces the post's current categories entirely." },
-        tags: { type: 'array', items: { type: 'integer' }, description: "Tag IDs. Replaces the post's current tags entirely." },
+        category_id: { type: 'integer', description: 'The category ID' },
       },
     },
   },
   {
+    name: 'create_category',
+    description: 'Create a new WordPress category. Fails if a category with the same name/slug already exists — use get_categories first to check.',
+    inputSchema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'Category name' },
+        description: { type: 'string', description: 'Category description' },
+        slug: { type: 'string', description: 'URL slug (auto-generated from name if omitted)' },
+        parent: { type: 'integer', description: 'Parent category ID, for a hierarchical sub-category' },
+      },
+    },
+  },
+  {
+    name: 'update_category',
+    description: 'Update an existing WordPress category (rename it, change its slug, description, or parent). Only the fields you provide are changed.',
+    inputSchema: {
+      type: 'object',
+      required: ['category_id'],
+      properties: {
+        category_id: { type: 'integer', description: 'The ID of the category to update' },
+        name: { type: 'string', description: 'New category name' },
+        description: { type: 'string', description: 'New category description' },
+        slug: { type: 'string', description: 'New URL slug' },
+        parent: { type: 'integer', description: 'New parent category ID' },
+      },
+    },
+  },
+  {
+    name: 'delete_category',
+    description: "Permanently delete a WordPress category. Categories don't support Trash, so this cannot be undone. Posts in the category are not deleted — they just lose this category.",
+    inputSchema: {
+      type: 'object',
+      required: ['category_id'],
+      properties: {
+        category_id: { type: 'integer', description: 'The ID of the category to delete' },
+      },
+    },
+  },
+
+  // ─── Tags (CRUD) ──────────────────────────────────────────────────────────
+  {
     name: 'get_tags',
-    description: 'Get WordPress tags (id, name, slug, post count). Use this to look up a tag ID by name before calling create_post/update_post, or to check if a tag already exists before create_tag.',
+    description: 'List WordPress tags (id, name, slug, post count). Use this to look up a tag ID by name before calling create_post/update_post, or to check if a tag already exists before create_tag.',
     inputSchema: {
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Search tags by name' },
         per_page: { type: 'integer', description: 'Tags to return (default 100)', default: 100 },
+      },
+    },
+  },
+  {
+    name: 'get_tag',
+    description: 'Get details of a single WordPress tag by its ID.',
+    inputSchema: {
+      type: 'object',
+      required: ['tag_id'],
+      properties: {
+        tag_id: { type: 'integer', description: 'The tag ID' },
       },
     },
   },
@@ -155,21 +252,18 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: 'create_post',
-    description: 'Create a new WordPress post.',
+    name: 'delete_tag',
+    description: "Permanently delete a WordPress tag. Tags don't support Trash, so this cannot be undone. Posts with the tag are not deleted — they just lose this tag.",
     inputSchema: {
       type: 'object',
-      required: ['title', 'content'],
+      required: ['tag_id'],
       properties: {
-        title: { type: 'string', description: 'Post title' },
-        content: { type: 'string', description: 'Post body content (HTML supported)' },
-        status: { type: 'string', enum: ['draft', 'publish', 'pending', 'private'], description: 'Post status (default: draft)', default: 'draft' },
-        excerpt: { type: 'string', description: 'Short excerpt' },
-        categories: { type: 'array', items: { type: 'integer' }, description: 'Category IDs' },
-        tags: { type: 'array', items: { type: 'integer' }, description: 'Tag IDs' },
+        tag_id: { type: 'integer', description: 'The ID of the tag to delete' },
       },
     },
   },
+
+  // ─── Media & specialized post-creation tools ─────────────────────────────
   {
     name: 'upload_image',
     description: 'Upload an image to WordPress media library. Provide image_url OR image_base64.',
@@ -426,6 +520,7 @@ const MCP_TOOLS = [
 
 async function runTool(name, args) {
   switch (name) {
+    // ─── Posts (CRUD) ───────────────────────────────────────────────────────
     case 'get_posts': {
       const posts = await wp.getPosts({
         per_page: args.per_page || 10,
@@ -443,6 +538,107 @@ async function runTool(name, args) {
       }));
     }
 
+    case 'get_post': {
+      const p = await wp.getPost(args.id);
+      return {
+        id: p.id,
+        title: p.title?.rendered,
+        content: p.content?.rendered,
+        status: p.status,
+        date: p.date,
+        link: p.link,
+        categories: p.categories,
+        tags: p.tags,
+        featured_media: p.featured_media,
+      };
+    }
+
+    case 'create_post': {
+      const p = await wp.createPost(args);
+      return { id: p.id, link: p.link, status: p.status };
+    }
+
+    case 'update_post': {
+      const { post_id, ...updates } = args;
+      const p = await wp.updatePost(post_id, updates);
+      return { id: p.id, link: p.link, status: p.status, categories: p.categories, tags: p.tags };
+    }
+
+    case 'delete_post': {
+      const result = await wp.deletePost(args.post_id, args.force === true);
+      return { id: args.post_id, deleted: true, permanently: args.force === true, status: result?.previous?.status || result?.status };
+    }
+
+    // ─── Categories (CRUD) ──────────────────────────────────────────────────
+    case 'get_categories': {
+      const categories = await wp.getCategories({
+        per_page: args.per_page || 100,
+        search: args.search,
+      });
+      return categories.map(c => ({ id: c.id, name: c.name, slug: c.slug, count: c.count }));
+    }
+
+    case 'get_category': {
+      const c = await wp.getCategory(args.category_id);
+      return { id: c.id, name: c.name, slug: c.slug, description: c.description, count: c.count, parent: c.parent };
+    }
+
+    case 'create_category': {
+      const c = await wp.createCategory({
+        name: args.name,
+        description: args.description,
+        slug: args.slug,
+        parent: args.parent,
+      });
+      return { id: c.id, name: c.name, slug: c.slug, parent: c.parent };
+    }
+
+    case 'update_category': {
+      const { category_id, ...updates } = args;
+      const c = await wp.updateCategory(category_id, updates);
+      return { id: c.id, name: c.name, slug: c.slug, parent: c.parent };
+    }
+
+    case 'delete_category': {
+      await wp.deleteCategory(args.category_id);
+      return { id: args.category_id, deleted: true };
+    }
+
+    // ─── Tags (CRUD) ────────────────────────────────────────────────────────
+    case 'get_tags': {
+      const tags = await wp.getTags({
+        per_page: args.per_page || 100,
+        search: args.search,
+      });
+      return tags.map(t => ({ id: t.id, name: t.name, slug: t.slug, count: t.count }));
+    }
+
+    case 'get_tag': {
+      const t = await wp.getTag(args.tag_id);
+      return { id: t.id, name: t.name, slug: t.slug, description: t.description, count: t.count };
+    }
+
+    case 'create_tag': {
+      const t = await wp.createTag({
+        name: args.name,
+        description: args.description,
+        slug: args.slug,
+      });
+      return { id: t.id, name: t.name, slug: t.slug };
+    }
+
+    case 'update_tag': {
+      const { tag_id, ...updates } = args;
+      const t = await wp.updateTag(tag_id, updates);
+      return { id: t.id, name: t.name, slug: t.slug };
+    }
+
+    case 'delete_tag': {
+      await wp.deleteTag(args.tag_id);
+      return { id: args.tag_id, deleted: true };
+    }
+
+    // ─── Internal linking helper (used by the SEO post tools) ──────────────
     case 'get_related_posts_for_linking': {
       // Fetch published posts filtered by keyword/category for internal linking
       const query = {
@@ -465,63 +661,6 @@ async function runTool(name, args) {
         usage: 'Pass the internal_links array (or a subset) directly to create_seo_post_with_ai_images, create_seo_post, or create_seo_post_with_canva. You can edit anchorText and keyword to match phrases that appear naturally in your new post content.',
         count: internal_links.length,
       };
-    }
-
-    case 'get_post': {
-      const p = await wp.getPost(args.id);
-      return {
-        id: p.id,
-        title: p.title?.rendered,
-        content: p.content?.rendered,
-        status: p.status,
-        date: p.date,
-        link: p.link,
-        categories: p.categories,
-        tags: p.tags,
-        featured_media: p.featured_media,
-      };
-    }
-
-    case 'get_categories': {
-      const categories = await wp.getCategories({
-        per_page: args.per_page || 100,
-        search: args.search,
-      });
-      return categories.map(c => ({ id: c.id, name: c.name, slug: c.slug, count: c.count }));
-    }
-
-    case 'update_post': {
-      const { post_id, ...updates } = args;
-      const p = await wp.updatePost(post_id, updates);
-      return { id: p.id, link: p.link, status: p.status, categories: p.categories, tags: p.tags };
-    }
-
-    case 'get_tags': {
-      const tags = await wp.getTags({
-        per_page: args.per_page || 100,
-        search: args.search,
-      });
-      return tags.map(t => ({ id: t.id, name: t.name, slug: t.slug, count: t.count }));
-    }
-
-    case 'create_tag': {
-      const t = await wp.createTag({
-        name: args.name,
-        description: args.description,
-        slug: args.slug,
-      });
-      return { id: t.id, name: t.name, slug: t.slug };
-    }
-
-    case 'update_tag': {
-      const { tag_id, ...updates } = args;
-      const t = await wp.updateTag(tag_id, updates);
-      return { id: t.id, name: t.name, slug: t.slug };
-    }
-
-    case 'create_post': {
-      const p = await wp.createPost(args);
-      return { id: p.id, link: p.link, status: p.status };
     }
 
     case 'upload_image': {

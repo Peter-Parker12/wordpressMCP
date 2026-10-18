@@ -41,13 +41,44 @@ function createWordPressClient({ url, username, password }) {
     return response.data;
   }
 
+  async function deletePost(postId, force = false) {
+    const response = await client.delete(`/posts/${postId}`, { params: { force } });
+    return response.data;
+  }
+
   async function getCategories(query = {}) {
     const response = await client.get('/categories', { params: query });
     return response.data;
   }
 
+  async function getCategory(categoryId) {
+    const response = await client.get(`/categories/${categoryId}`);
+    return response.data;
+  }
+
+  async function createCategory(payload) {
+    const response = await client.post('/categories', payload);
+    return response.data;
+  }
+
+  async function updateCategory(categoryId, updates) {
+    const response = await client.post(`/categories/${categoryId}`, updates);
+    return response.data;
+  }
+
+  async function deleteCategory(categoryId) {
+    // Terms don't support trashing — WordPress requires force=true or it 501s
+    const response = await client.delete(`/categories/${categoryId}`, { params: { force: true } });
+    return response.data;
+  }
+
   async function getTags(query = {}) {
     const response = await client.get('/tags', { params: query });
+    return response.data;
+  }
+
+  async function getTag(tagId) {
+    const response = await client.get(`/tags/${tagId}`);
     return response.data;
   }
 
@@ -58,6 +89,11 @@ function createWordPressClient({ url, username, password }) {
 
   async function updateTag(tagId, updates) {
     const response = await client.post(`/tags/${tagId}`, updates);
+    return response.data;
+  }
+
+  async function deleteTag(tagId) {
+    const response = await client.delete(`/tags/${tagId}`, { params: { force: true } });
     return response.data;
   }
 
@@ -148,10 +184,17 @@ function createWordPressClient({ url, username, password }) {
     updatePost,
     getPosts,
     getPost,
+    deletePost,
     getCategories,
+    getCategory,
+    createCategory,
+    updateCategory,
+    deleteCategory,
     getTags,
+    getTag,
     createTag,
     updateTag,
+    deleteTag,
     uploadMedia,
     setFeaturedImage,
     getCurrentUser,

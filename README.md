@@ -4,11 +4,9 @@ A Node.js MCP server that exposes WordPress operations as tools for Claude.
 
 ## What this does
 
-- Lists and searches WordPress posts
-- Reads the full content of a single post
-- Creates new WordPress posts
-- Uploads images to the WordPress media library
-- Creates a post with a featured image in one step
+- Full CRUD for WordPress posts, categories, and tags
+- Uploads images to the WordPress media library, with optional AI image generation
+- SEO/AEO-optimized post creation (schema markup, FAQ blocks, internal linking, keyword checks)
 
 ## Setup
 
@@ -56,18 +54,40 @@ docker run --env-file .env -p 9809:9809 wordpress-mcp
 
 ## Tools
 
-The server speaks MCP over JSON-RPC at a single endpoint: `POST /`. It exposes these tools:
+The server speaks MCP over JSON-RPC at a single endpoint: `POST /`.
+
+### Posts (CRUD)
 
 - `get_posts` — list/search posts (`per_page`, `page`, `status`, `search`)
 - `get_post` — full content of one post by `id`
+- `create_post` — create a post (`title`, `content`, `status`, `excerpt`, `categories`, `tags`, `featured_media`)
+- `update_post` — edit an existing post by `post_id`; only the fields you pass are changed. `categories`/`tags` **replace** the post's current set (not additive). Set `status: "draft"` or `"private"` to unpublish.
+- `delete_post` — delete a post by `post_id`; moves to Trash by default, pass `force: true` to permanently delete
+
+### Categories (CRUD)
+
 - `get_categories` — list categories (`id`, `name`, `slug`, `count`), optionally filtered by `search`
-- `create_post` — create a post (`title`, `content`, `status`, `excerpt`, `categories`, `tags`)
-- `update_post` — edit an existing post by `post_id`; only the fields you pass are changed. `categories`/`tags` **replace** the post's current set (not additive)
+- `get_category` — details of one category by `category_id`
+- `create_category` — create a category (`name`, `description`, `slug`, `parent`)
+- `update_category` — edit a category by `category_id`
+- `delete_category` — permanently delete a category by `category_id` (categories don't support Trash)
+
+### Tags (CRUD)
+
 - `get_tags` — list tags (`id`, `name`, `slug`, `count`), optionally filtered by `search`
-- `create_tag` — create a new tag (`name`, `description`, `slug`)
-- `update_tag` — rename/edit an existing tag by `tag_id`
+- `get_tag` — details of one tag by `tag_id`
+- `create_tag` — create a tag (`name`, `description`, `slug`)
+- `update_tag` — edit a tag by `tag_id`
+- `delete_tag` — permanently delete a tag by `tag_id` (tags don't support Trash)
+
+### Media & specialized post creation
+
 - `upload_image` — upload an image to the media library (`image_url` or `image_base64`, `filename`, `mime_type`)
 - `create_post_with_image` — upload a featured image and create the post in one call
+- `generate_image` / `generate_image_for_post` — AI image generation (Pollinations.ai / Google Imagen 3) uploaded straight to the media library, optionally bundled into a new post
+- `create_post_with_ai_images` — auto-generates and embeds one AI image per H2 section
+- `create_seo_post` / `create_seo_post_with_ai_images` / `create_seo_post_with_canva` — SEO/AEO-optimized post creation (TOC, FAQ schema, Article schema, keyword checks) with different image sourcing strategies
+- `get_related_posts_for_linking` — find existing posts suitable for internal linking, for use with the `create_seo_post*` tools
 
 Health check: `GET /health`
 
